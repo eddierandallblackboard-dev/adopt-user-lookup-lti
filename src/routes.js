@@ -22,10 +22,14 @@ async function getBbToken() {
   if (bbTokenCache.token && bbTokenCache.expires > Date.now()) return bbTokenCache.token;
   const { url, id, secret } = bbConfig();
   console.log(`[BB] Fetching token from ${url}`);
+  const credentials = Buffer.from(`${id}:${secret}`).toString('base64');
   const resp = await fetch(`${url}/learn/api/public/v1/oauth2/token`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: id, client_secret: secret })
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': `Basic ${credentials}`
+    },
+    body: new URLSearchParams({ grant_type: 'client_credentials' })
   });
   if (!resp.ok) {
     const body = await resp.text();
