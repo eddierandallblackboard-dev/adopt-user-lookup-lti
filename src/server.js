@@ -42,9 +42,8 @@ function consumeNonce(n) {
 }
 setInterval(() => { const now = Date.now(); for (const [k,v] of usedNonces) if (now>v) usedNonces.delete(k); }, 60_000);
 
-// ── State store — kept server-side, keyed by state value ─────────────────────
-// Avoids relying on session cookies surviving the OIDC redirect in iframes/popups
-const pendingStates = new Map(); // state -> { nonce, expires }
+// ── State store (server-side, avoids cookie dependency) ───────────────────────
+const pendingStates = new Map();
 function saveState(state, nonce) {
   pendingStates.set(state, { nonce, expires: Date.now() + 10 * 60 * 1000 });
 }
@@ -75,7 +74,7 @@ app.use(session({
   saveUninitialized: false,
   cookie: {
     secure:   true,
-    sameSite: 'none',   // required for cross-site iframe launches
+    sameSite: 'none',
     maxAge:   4 * 60 * 60 * 1000
   }
 }));
@@ -99,13 +98,8 @@ async function handleOidcLogin(req, res) {
   const state = crypto.randomUUID();
   const nonce = crypto.randomUUID();
 
-  // Store state server-side — don't rely on session cookie surviving the redirect
   registerNonce(nonce);
   saveState(state, nonce);
-
-  // Also try to save in session as a fallback
-  req.session.ltiState = state;
-  req.session.save(() => {});
 
   const qs = new URLSearchParams({
     scope: 'openid', response_type: 'id_token', response_mode: 'form_post',
@@ -130,14 +124,10 @@ app.post('/lti/launch', async (req, res) => {
   if (!id_token) return res.status(400).send('Missing id_token');
   if (!state)    return res.status(400).send('Missing state');
 
-  // Validate state — check server-side store first, fall back to session
   const stateEntry = consumeState(state);
   if (!stateEntry) {
-    // Fall back to session-based check
-    if (!req.session?.ltiState || req.session.ltiState !== state) {
-      console.error(`[LTI] State mismatch — received=${state} session=${req.session?.ltiState}`);
-      return res.status(400).send('State mismatch — please try launching the tool again from Blackboard.');
-    }
+    console.error(`[LTI] State mismatch — received=${state}`);
+    return res.status(400).send('State mismatch — please try launching the tool again from Blackboard.');
   }
 
   try {
@@ -146,7 +136,7 @@ app.post('/lti/launch', async (req, res) => {
 
     if (!consumeNonce(payload.nonce)) return res.status(400).send('Invalid or replayed nonce');
 
-    req.session.ltiToken = {
+    const ltiToken = {
       sub:     payload.sub,
       name:    payload.name,
       email:   payload.email,
@@ -154,10 +144,28 @@ app.post('/lti/launch', async (req, res) => {
       context: payload['https://purl.imsglobal.org/spec/lti/claim/context'],
       iss:     payload.iss,
     };
-    delete req.session.ltiState;
 
     console.log(`[LTI] Launch success — sub=${payload.sub}`);
-    res.redirect('/app');
+
+    // Use session.save() + meta-refresh instead of res.redirect()
+    // This ensures the Set-Cookie header is sent before the browser navigates,
+    // which fixes SameSite/iframe cookie issues in Blackboard launches
+    req.session.ltiToken = ltiToken;
+    req.session.save((err) => {
+      if (err) console.error('[LTI] Session save error:', err);
+      res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Launching…</title>
+  <meta http-equiv="refresh" content="0;url=/app">
+</head>
+<body>
+  <script>window.location.replace('/app');</script>
+  <p>Launching tool… <a href="/app">Click here if not redirected</a></p>
+</body>
+</html>`);
+    });
+
   } catch (err) {
     console.error('[LTI] Launch error:', err.message);
     res.status(400).send(`LTI launch failed: ${err.message}`);
