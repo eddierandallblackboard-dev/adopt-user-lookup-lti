@@ -2,7 +2,7 @@ const express = require('express');
 const fetch   = require('node-fetch');
 const router  = express.Router();
 
-const BB_URL           = (process.env.BB_PLATFORM_ISSUER || '').replace(/\/$/, '');
+const BB_URL           = (process.env.BB_HOST || process.env.BB_PLATFORM_ISSUER || '').replace(/\/$/, '');
 const BB_CLIENT_ID     = process.env.BB_CLIENT_ID;
 const BB_CLIENT_SECRET = process.env.BB_CLIENT_SECRET;
 const ADOPT_HOST       = (process.env.ADOPT_HOST || 'https://app.pendo.io').replace(/\/$/, '');
@@ -17,7 +17,10 @@ async function getBbToken() {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'client_credentials', client_id: BB_CLIENT_ID, client_secret: BB_CLIENT_SECRET })
   });
-  if (!resp.ok) throw new Error(`BB token request failed: ${resp.status}`);
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`BB token request failed: ${resp.status} — ${body.slice(0,200)}`);
+  }
   const data = await resp.json();
   bbTokenCache = { token: data.access_token, expires: Date.now() + (data.expires_in - 60) * 1000 };
   return data.access_token;
