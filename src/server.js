@@ -93,6 +93,21 @@ app.use(express.static(path.join(__dirname, '../public')));
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get('/health', (_, res) => res.json({ ok: true }));
 
+// ── Debug — no auth, shows env var status ─────────────────────────────────────
+app.get('/debug', (_, res) => {
+  const cid = process.env.BB_CLIENT_ID || '';
+  const lid = process.env.BB_LTI_CLIENT_ID || '';
+  res.json({
+    BB_HOST:          process.env.BB_HOST ? `set → ${process.env.BB_HOST}` : 'MISSING',
+    BB_CLIENT_ID:     cid ? `set → ${cid.slice(0,8)}...` : 'MISSING',
+    BB_CLIENT_SECRET: process.env.BB_CLIENT_SECRET ? 'set' : 'MISSING',
+    BB_LTI_CLIENT_ID: lid ? `set → ${lid.slice(0,8)}...` : 'MISSING',
+    SESSION_SECRET:   process.env.SESSION_SECRET ? 'set' : 'MISSING',
+    APP_URL:          process.env.APP_URL || 'MISSING',
+    NODE_ENV:         process.env.NODE_ENV || 'not set',
+  });
+});
+
 // ── JWKS ──────────────────────────────────────────────────────────────────────
 app.get('/keys', async (_, res) => {
   const jwk = await exportJWK(toolPublicKey);
