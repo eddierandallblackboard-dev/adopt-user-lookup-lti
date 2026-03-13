@@ -1,10 +1,9 @@
 require('dotenv').config();
 const express      = require('express');
-const session      = require('express-session');
 const cookieParser = require('cookie-parser');
 const crypto       = require('crypto');
 const path         = require('path');
-const { exportJWK, importPKCS8, importSPKI, jwtVerify, createRemoteJWKSet } = require('jose');
+const { exportJWK, importPKCS8, importSPKI, jwtVerify, createRemoteJWKSet, SignJWT } = require('jose');
 const routes       = require('./routes');
 
 const APP_URL        = (process.env.APP_URL || '').replace(/\/$/, '');
@@ -16,7 +15,7 @@ if (!APP_URL || !SESSION_SECRET) {
   process.exit(1);
 }
 
-// ── RSA keypair ───────────────────────────────────────────────────────────────
+// ── RSA keypair (for BB JWT verification) ─────────────────────────────────────
 let toolPublicKey, toolPrivateKey;
 const toolKid = process.env.LTI_KID;
 
@@ -31,6 +30,27 @@ const toolKid = process.env.LTI_KID;
   toolPublicKey  = await importSPKI(pubPem,   'RS256');
 })();
 
+// ── App-level signing key (for our own session tokens) ────────────────────────
+// Derived from SESSION_SECRET — stable across restarts
+const appSigningKey = crypto.createHmac('sha256', SESSION_SECRET)
+  .update('app-signing-key-v1')
+  .digest();
+
+async function signAppToken(payload) {
+  return new SignJWT(payload)
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime('4h')
+    .sign(appSigningKey);
+}
+
+async function verifyAppToken(token) {
+  const { createSecretKey } = require('crypto');
+  const { jwtVerify: jv } = require('jose');
+  const { payload } = await jv(token, appSigningKey);
+  return payload;
+}
+
 // ── Nonce store ───────────────────────────────────────────────────────────────
 const usedNonces = new Map();
 function registerNonce(n) { usedNonces.set(n, Date.now() + 10 * 60 * 1000); }
@@ -42,7 +62,7 @@ function consumeNonce(n) {
 }
 setInterval(() => { const now = Date.now(); for (const [k,v] of usedNonces) if (now>v) usedNonces.delete(k); }, 60_000);
 
-// ── State store (server-side, avoids cookie dependency) ───────────────────────
+// ── State store ───────────────────────────────────────────────────────────────
 const pendingStates = new Map();
 function saveState(state, nonce) {
   pendingStates.set(state, { nonce, expires: Date.now() + 10 * 60 * 1000 });
@@ -68,16 +88,6 @@ const app = express();
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-app.use(session({
-  secret: SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    secure:   true,
-    sameSite: 'none',
-    maxAge:   4 * 60 * 60 * 1000
-  }
-}));
 app.use(express.static(path.join(__dirname, '../public')));
 
 // ── Health ────────────────────────────────────────────────────────────────────
@@ -97,7 +107,6 @@ async function handleOidcLogin(req, res) {
 
   const state = crypto.randomUUID();
   const nonce = crypto.randomUUID();
-
   registerNonce(nonce);
   saveState(state, nonce);
 
@@ -110,7 +119,7 @@ async function handleOidcLogin(req, res) {
     state, nonce,
   });
 
-  console.log(`[LTI] Login init — iss=${params.iss} state=${state}`);
+  console.log(`[LTI] Login init — state=${state}`);
   res.redirect(`${p.authUrl}?${qs}`);
 }
 app.get('/lti',  handleOidcLogin);
@@ -126,7 +135,7 @@ app.post('/lti/launch', async (req, res) => {
 
   const stateEntry = consumeState(state);
   if (!stateEntry) {
-    console.error(`[LTI] State mismatch — received=${state}`);
+    console.error(`[LTI] State not found — received=${state}`);
     return res.status(400).send('State mismatch — please try launching the tool again from Blackboard.');
   }
 
@@ -136,35 +145,32 @@ app.post('/lti/launch', async (req, res) => {
 
     if (!consumeNonce(payload.nonce)) return res.status(400).send('Invalid or replayed nonce');
 
-    const ltiToken = {
+    // Sign our own app token — passed in URL, stored in localStorage by the frontend
+    // This completely bypasses cookie/session issues with Blackboard iframes
+    const appToken = await signAppToken({
       sub:     payload.sub,
       name:    payload.name,
       email:   payload.email,
       roles:   payload['https://purl.imsglobal.org/spec/lti/claim/roles'] || [],
       context: payload['https://purl.imsglobal.org/spec/lti/claim/context'],
       iss:     payload.iss,
-    };
+    });
 
     console.log(`[LTI] Launch success — sub=${payload.sub}`);
 
-    // Use session.save() + meta-refresh instead of res.redirect()
-    // This ensures the Set-Cookie header is sent before the browser navigates,
-    // which fixes SameSite/iframe cookie issues in Blackboard launches
-    req.session.ltiToken = ltiToken;
-    req.session.save((err) => {
-      if (err) console.error('[LTI] Session save error:', err);
-      res.send(`<!DOCTYPE html>
+    // Pass token in URL hash (never sent to server, stored by frontend JS)
+    res.send(`<!DOCTYPE html>
 <html>
-<head>
-  <title>Launching…</title>
-  <meta http-equiv="refresh" content="0;url=/app">
-</head>
+<head><title>Launching…</title></head>
 <body>
-  <script>window.location.replace('/app');</script>
-  <p>Launching tool… <a href="/app">Click here if not redirected</a></p>
+<script>
+  // Store the auth token in sessionStorage then navigate to the app
+  try { sessionStorage.setItem('lti_token', ${JSON.stringify(appToken)}); } catch(e) {}
+  window.location.replace('/app');
+</script>
+<p>Launching… <a href="/app">click here if not redirected</a></p>
 </body>
 </html>`);
-    });
 
   } catch (err) {
     console.error('[LTI] Launch error:', err.message);
@@ -172,15 +178,28 @@ app.post('/lti/launch', async (req, res) => {
   }
 });
 
-// ── Auth middleware ───────────────────────────────────────────────────────────
-function requireLti(req, res, next) {
-  if (req.session?.ltiToken) return next();
+// ── Auth middleware — reads token from Authorization header ───────────────────
+async function requireLti(req, res, next) {
+  // Dev mode bypass
   if (process.env.NODE_ENV !== 'production') return next();
-  res.status(401).json({ error: 'LTI session required' });
+
+  const auth = req.headers['authorization'] || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+
+  if (!token) return res.status(401).json({ error: 'LTI session required' });
+
+  try {
+    req.ltiUser = await verifyAppToken(token);
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid or expired session' });
+  }
 }
 
-// ── App + API ─────────────────────────────────────────────────────────────────
-app.get('/app', requireLti, (_, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+// ── App shell — no auth needed, frontend handles it ──────────────────────────
+app.get('/app', (_, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+
+// ── API routes — protected by Bearer token ────────────────────────────────────
 app.use('/api', requireLti, routes);
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

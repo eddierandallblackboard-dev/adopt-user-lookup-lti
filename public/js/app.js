@@ -4,6 +4,13 @@
 // ── Constants ─────────────────────────────────────────────────────────────────
 const UUID_PREFIX = 'baed9e72-f471-4334-9064-53ce81bd4a56_';
 
+
+// ── LTI auth token (stored in sessionStorage after launch) ────────────────────
+function getLtiToken() {
+  try { return sessionStorage.getItem('lti_token') || ''; } catch(e) { return ''; }
+}
+
+
 // ── State ─────────────────────────────────────────────────────────────────────
 let csvData   = null;  // { headers, rows, emailCol }
 let results   = [];
@@ -85,9 +92,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 async function apiFetch(path, opts = {}) {
+  const token = getLtiToken();
   const r = await fetch(path, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) }
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
+      ...(opts.headers||{})
+    }
   });
   return { ok: r.ok, status: r.status, data: r.ok ? await r.json() : null };
 }
