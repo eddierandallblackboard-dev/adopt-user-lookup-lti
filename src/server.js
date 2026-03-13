@@ -16,7 +16,7 @@ if (!APP_URL || !SESSION_SECRET) {
   process.exit(1);
 }
 
-// ── RSA keypair — loaded from env vars, stable across restarts ────────────────
+// ── RSA keypair ───────────────────────────────────────────────────────────────
 let toolPublicKey, toolPrivateKey;
 const toolKid = process.env.LTI_KID;
 
@@ -24,14 +24,14 @@ const toolKid = process.env.LTI_KID;
   const privPem = (process.env.LTI_PRIVATE_KEY || '').replace(/\\n/g, '\n');
   const pubPem  = (process.env.LTI_PUBLIC_KEY  || '').replace(/\\n/g, '\n');
   if (!privPem || !pubPem || !toolKid) {
-    console.error('Missing LTI_PRIVATE_KEY, LTI_PUBLIC_KEY or LTI_KID — see README');
+    console.error('Missing LTI_PRIVATE_KEY, LTI_PUBLIC_KEY or LTI_KID');
     process.exit(1);
   }
   toolPrivateKey = await importPKCS8(privPem, 'RS256');
   toolPublicKey  = await importSPKI(pubPem,   'RS256');
 })();
 
-// ── Nonce store (in-memory, 10 min TTL) ──────────────────────────────────────
+// ── Nonce store ───────────────────────────────────────────────────────────────
 const usedNonces = new Map();
 function registerNonce(n) { usedNonces.set(n, Date.now() + 10 * 60 * 1000); }
 function consumeNonce(n) {
@@ -42,12 +42,24 @@ function consumeNonce(n) {
 }
 setInterval(() => { const now = Date.now(); for (const [k,v] of usedNonces) if (now>v) usedNonces.delete(k); }, 60_000);
 
-// ── Platform config from env ──────────────────────────────────────────────────
+// ── State store — kept server-side, keyed by state value ─────────────────────
+// Avoids relying on session cookies surviving the OIDC redirect in iframes/popups
+const pendingStates = new Map(); // state -> { nonce, expires }
+function saveState(state, nonce) {
+  pendingStates.set(state, { nonce, expires: Date.now() + 10 * 60 * 1000 });
+}
+function consumeState(state) {
+  const entry = pendingStates.get(state);
+  if (!entry || Date.now() > entry.expires) { pendingStates.delete(state); return null; }
+  pendingStates.delete(state);
+  return entry;
+}
+setInterval(() => { const now = Date.now(); for (const [k,v] of pendingStates) if (now > v.expires) pendingStates.delete(k); }, 60_000);
+
+// ── Platform config ───────────────────────────────────────────────────────────
 const platform = () => ({
-  // Blackboard's issuer is always https://blackboard.com for all instances
   issuer:   'https://blackboard.com',
   clientId: process.env.BB_LTI_CLIENT_ID,
-  // These come from the Developer Portal after registration
   authUrl:  process.env.BB_LTI_AUTH_URL  || 'https://developer.blackboard.com/api/v1/gateway/oidcauth',
   jwksUrl:  process.env.BB_LTI_JWKS_URL  || `https://developer.blackboard.com/api/v1/management/applications/${process.env.BB_LTI_CLIENT_ID}/jwks.json`,
 });
@@ -62,8 +74,8 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure:   process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    secure:   true,
+    sameSite: 'none',   // required for cross-site iframe launches
     maxAge:   4 * 60 * 60 * 1000
   }
 }));
@@ -72,12 +84,10 @@ app.use(express.static(path.join(__dirname, '../public')));
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get('/health', (_, res) => res.json({ ok: true }));
 
-// ── JWKS — Blackboard fetches our public key from here on every launch ────────
+// ── JWKS ──────────────────────────────────────────────────────────────────────
 app.get('/keys', async (_, res) => {
   const jwk = await exportJWK(toolPublicKey);
-  jwk.kid = toolKid;
-  jwk.alg = 'RS256';
-  jwk.use = 'sig';
+  jwk.kid = toolKid; jwk.alg = 'RS256'; jwk.use = 'sig';
   res.json({ keys: [jwk] });
 });
 
@@ -86,25 +96,27 @@ async function handleOidcLogin(req, res) {
   const p      = platform();
   const params = { ...req.query, ...req.body };
 
-  // Log the issuer Blackboard sends — useful for debugging
-  // Blackboard always sends iss=https://blackboard.com regardless of instance URL
-  if (params.iss && params.iss !== p.issuer) {
-    console.warn(`[LTI] Received iss=${params.iss}, expected ${p.issuer}`);
-  }
-
   const state = crypto.randomUUID();
   const nonce = crypto.randomUUID();
+
+  // Store state server-side — don't rely on session cookie surviving the redirect
   registerNonce(nonce);
+  saveState(state, nonce);
+
+  // Also try to save in session as a fallback
   req.session.ltiState = state;
+  req.session.save(() => {});
 
   const qs = new URLSearchParams({
     scope: 'openid', response_type: 'id_token', response_mode: 'form_post',
     prompt: 'none', client_id: p.clientId,
-    redirect_uri:      `${APP_URL}/lti/launch`,
-    login_hint:        params.login_hint || '',
-    lti_message_hint:  params.lti_message_hint || '',
+    redirect_uri:     `${APP_URL}/lti/launch`,
+    login_hint:       params.login_hint || '',
+    lti_message_hint: params.lti_message_hint || '',
     state, nonce,
   });
+
+  console.log(`[LTI] Login init — iss=${params.iss} state=${state}`);
   res.redirect(`${p.authUrl}?${qs}`);
 }
 app.get('/lti',  handleOidcLogin);
@@ -114,8 +126,19 @@ app.post('/lti', handleOidcLogin);
 app.post('/lti/launch', async (req, res) => {
   const p = platform();
   const { id_token, state } = req.body;
-  if (!id_token)                                return res.status(400).send('Missing id_token');
-  if (!state || state !== req.session.ltiState) return res.status(400).send('State mismatch');
+
+  if (!id_token) return res.status(400).send('Missing id_token');
+  if (!state)    return res.status(400).send('Missing state');
+
+  // Validate state — check server-side store first, fall back to session
+  const stateEntry = consumeState(state);
+  if (!stateEntry) {
+    // Fall back to session-based check
+    if (!req.session?.ltiState || req.session.ltiState !== state) {
+      console.error(`[LTI] State mismatch — received=${state} session=${req.session?.ltiState}`);
+      return res.status(400).send('State mismatch — please try launching the tool again from Blackboard.');
+    }
+  }
 
   try {
     const JWKS = createRemoteJWKSet(new URL(p.jwksUrl));
@@ -132,6 +155,8 @@ app.post('/lti/launch', async (req, res) => {
       iss:     payload.iss,
     };
     delete req.session.ltiState;
+
+    console.log(`[LTI] Launch success — sub=${payload.sub}`);
     res.redirect('/app');
   } catch (err) {
     console.error('[LTI] Launch error:', err.message);
