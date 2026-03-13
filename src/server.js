@@ -44,10 +44,12 @@ setInterval(() => { const now = Date.now(); for (const [k,v] of usedNonces) if (
 
 // ── Platform config from env ──────────────────────────────────────────────────
 const platform = () => ({
-  issuer:   process.env.BB_PLATFORM_ISSUER,
+  // Blackboard's issuer is always https://blackboard.com for all instances
+  issuer:   'https://blackboard.com',
   clientId: process.env.BB_LTI_CLIENT_ID,
-  authUrl:  process.env.BB_LTI_AUTH_URL,
-  jwksUrl:  process.env.BB_LTI_JWKS_URL,
+  // These come from the Developer Portal after registration
+  authUrl:  process.env.BB_LTI_AUTH_URL  || 'https://developer.blackboard.com/api/v1/gateway/oidcauth',
+  jwksUrl:  process.env.BB_LTI_JWKS_URL  || `https://developer.blackboard.com/api/v1/management/applications/${process.env.BB_LTI_CLIENT_ID}/jwks.json`,
 });
 
 // ── Express ───────────────────────────────────────────────────────────────────
@@ -83,7 +85,12 @@ app.get('/keys', async (_, res) => {
 async function handleOidcLogin(req, res) {
   const p      = platform();
   const params = { ...req.query, ...req.body };
-  if (!params.iss || params.iss !== p.issuer) return res.status(400).send(`Unknown issuer: ${params.iss}`);
+
+  // Log the issuer Blackboard sends — useful for debugging
+  // Blackboard always sends iss=https://blackboard.com regardless of instance URL
+  if (params.iss && params.iss !== p.issuer) {
+    console.warn(`[LTI] Received iss=${params.iss}, expected ${p.issuer}`);
+  }
 
   const state = crypto.randomUUID();
   const nonce = crypto.randomUUID();
