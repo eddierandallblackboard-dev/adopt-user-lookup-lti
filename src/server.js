@@ -4,27 +4,34 @@ const session      = require('express-session');
 const cookieParser = require('cookie-parser');
 const crypto       = require('crypto');
 const path         = require('path');
-const { exportJWK, generateKeyPair, jwtVerify, createRemoteJWKSet } = require('jose');
+const { exportJWK, importPKCS8, importSPKI, jwtVerify, createRemoteJWKSet } = require('jose');
 const routes       = require('./routes');
 
 const APP_URL        = (process.env.APP_URL || '').replace(/\/$/, '');
-const SESSION_SECRET = process.env.SESSION_SECRET || process.env.LTI_KEY;
+const SESSION_SECRET = process.env.SESSION_SECRET;
 const PORT           = process.env.PORT || 3000;
 
 if (!APP_URL || !SESSION_SECRET) {
-  console.error('Missing required env vars: APP_URL and SESSION_SECRET (or LTI_KEY)');
+  console.error('Missing required env vars: APP_URL, SESSION_SECRET');
   process.exit(1);
 }
 
-// ── RSA keypair (in-memory) ───────────────────────────────────────────────────
-let toolPublicKey, toolKid;
+// ── RSA keypair — loaded from env vars, stable across restarts ────────────────
+let toolPublicKey, toolPrivateKey;
+const toolKid = process.env.LTI_KID;
+
 (async () => {
-  const pair   = await generateKeyPair('RS256');
-  toolPublicKey = pair.publicKey;
-  toolKid       = crypto.randomUUID();
+  const privPem = (process.env.LTI_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  const pubPem  = (process.env.LTI_PUBLIC_KEY  || '').replace(/\\n/g, '\n');
+  if (!privPem || !pubPem || !toolKid) {
+    console.error('Missing LTI_PRIVATE_KEY, LTI_PUBLIC_KEY or LTI_KID — see README');
+    process.exit(1);
+  }
+  toolPrivateKey = await importPKCS8(privPem, 'RS256');
+  toolPublicKey  = await importSPKI(pubPem,   'RS256');
 })();
 
-// ── Nonce store ───────────────────────────────────────────────────────────────
+// ── Nonce store (in-memory, 10 min TTL) ──────────────────────────────────────
 const usedNonces = new Map();
 function registerNonce(n) { usedNonces.set(n, Date.now() + 10 * 60 * 1000); }
 function consumeNonce(n) {
@@ -63,16 +70,18 @@ app.use(express.static(path.join(__dirname, '../public')));
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get('/health', (_, res) => res.json({ ok: true }));
 
-// ── JWKS ──────────────────────────────────────────────────────────────────────
+// ── JWKS — Blackboard fetches our public key from here on every launch ────────
 app.get('/keys', async (_, res) => {
   const jwk = await exportJWK(toolPublicKey);
-  jwk.kid = toolKid; jwk.alg = 'RS256'; jwk.use = 'sig';
+  jwk.kid = toolKid;
+  jwk.alg = 'RS256';
+  jwk.use = 'sig';
   res.json({ keys: [jwk] });
 });
 
-// ── OIDC login initiation (Step 1) ────────────────────────────────────────────
+// ── Step 1: OIDC Login Initiation ─────────────────────────────────────────────
 async function handleOidcLogin(req, res) {
-  const p = platform();
+  const p      = platform();
   const params = { ...req.query, ...req.body };
   if (!params.iss || params.iss !== p.issuer) return res.status(400).send(`Unknown issuer: ${params.iss}`);
 
@@ -84,9 +93,9 @@ async function handleOidcLogin(req, res) {
   const qs = new URLSearchParams({
     scope: 'openid', response_type: 'id_token', response_mode: 'form_post',
     prompt: 'none', client_id: p.clientId,
-    redirect_uri: `${APP_URL}/lti/launch`,
-    login_hint: params.login_hint || '',
-    lti_message_hint: params.lti_message_hint || '',
+    redirect_uri:      `${APP_URL}/lti/launch`,
+    login_hint:        params.login_hint || '',
+    lti_message_hint:  params.lti_message_hint || '',
     state, nonce,
   });
   res.redirect(`${p.authUrl}?${qs}`);
@@ -94,11 +103,11 @@ async function handleOidcLogin(req, res) {
 app.get('/lti',  handleOidcLogin);
 app.post('/lti', handleOidcLogin);
 
-// ── LTI launch / OIDC callback (Step 2) ──────────────────────────────────────
+// ── Step 2: LTI Launch ────────────────────────────────────────────────────────
 app.post('/lti/launch', async (req, res) => {
   const p = platform();
   const { id_token, state } = req.body;
-  if (!id_token)                         return res.status(400).send('Missing id_token');
+  if (!id_token)                                return res.status(400).send('Missing id_token');
   if (!state || state !== req.session.ltiState) return res.status(400).send('State mismatch');
 
   try {
@@ -108,12 +117,12 @@ app.post('/lti/launch', async (req, res) => {
     if (!consumeNonce(payload.nonce)) return res.status(400).send('Invalid or replayed nonce');
 
     req.session.ltiToken = {
-      sub:        payload.sub,
-      name:       payload.name,
-      email:      payload.email,
-      roles:      payload['https://purl.imsglobal.org/spec/lti/claim/roles'] || [],
-      context:    payload['https://purl.imsglobal.org/spec/lti/claim/context'],
-      iss:        payload.iss,
+      sub:     payload.sub,
+      name:    payload.name,
+      email:   payload.email,
+      roles:   payload['https://purl.imsglobal.org/spec/lti/claim/roles'] || [],
+      context: payload['https://purl.imsglobal.org/spec/lti/claim/context'],
+      iss:     payload.iss,
     };
     delete req.session.ltiState;
     res.redirect('/app');
@@ -126,7 +135,7 @@ app.post('/lti/launch', async (req, res) => {
 // ── Auth middleware ───────────────────────────────────────────────────────────
 function requireLti(req, res, next) {
   if (req.session?.ltiToken) return next();
-  if (process.env.NODE_ENV !== 'production') return next(); // allow direct access in dev
+  if (process.env.NODE_ENV !== 'production') return next();
   res.status(401).json({ error: 'LTI session required' });
 }
 
