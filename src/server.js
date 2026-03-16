@@ -180,15 +180,20 @@ app.post('/lti/launch', async (req, res) => {
 
     console.log(`[LTI] Launch success — sub=${payload.sub}`);
 
-    // Pass token in URL hash (never sent to server, stored by frontend JS)
+    // Pass token in URL hash — never sent to server, readable by frontend before sessionStorage
+    const tokenJson = JSON.stringify(appToken);
     res.send(`<!DOCTYPE html>
 <html>
 <head><title>Launching…</title></head>
 <body>
 <script>
-  // Store the auth token in sessionStorage then navigate to the app
-  try { sessionStorage.setItem('lti_token', ${JSON.stringify(appToken)}); } catch(e) {}
-  window.location.replace('/app');
+  var token = ${tokenJson};
+  // Try sessionStorage first, fall back silently
+  try { sessionStorage.setItem('lti_token', token); } catch(e) {}
+  // Also store in window.name which survives cross-origin iframe navigation
+  try { window.name = 'lti_token:' + token; } catch(e) {}
+  // Pass token in hash so /app can read it even if sessionStorage is blocked
+  window.location.replace('/app#t=' + encodeURIComponent(token));
 </script>
 <p>Launching… <a href="/app">click here if not redirected</a></p>
 </body>

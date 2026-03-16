@@ -38,9 +38,33 @@ function stripUuidPrefix(value) {
 }
 
 
-// ── LTI auth token (stored in sessionStorage after launch) ────────────────────
+// ── LTI auth token — reads from hash, window.name, or sessionStorage ────────────
 function getLtiToken() {
-  try { return sessionStorage.getItem('lti_token') || ''; } catch(e) { return ''; }
+  // 1. Check URL hash (set by launch page, most reliable in iframes)
+  try {
+    const hash = window.location.hash;
+    if (hash && hash.startsWith('#t=')) {
+      const token = decodeURIComponent(hash.slice(3));
+      if (token) {
+        // Promote to sessionStorage and clear hash
+        try { sessionStorage.setItem('lti_token', token); } catch(e) {}
+        history.replaceState(null, '', window.location.pathname);
+        return token;
+      }
+    }
+  } catch(e) {}
+  // 2. Check sessionStorage
+  try {
+    const t = sessionStorage.getItem('lti_token');
+    if (t) return t;
+  } catch(e) {}
+  // 3. Check window.name
+  try {
+    if (window.name && window.name.startsWith('lti_token:')) {
+      return window.name.slice('lti_token:'.length);
+    }
+  } catch(e) {}
+  return '';
 }
 
 

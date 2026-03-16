@@ -162,7 +162,8 @@ router.post('/adopt/segments/create', async (req, res) => {
   const { key, name, visitors } = req.body;
   if (!key || !name || !visitors) return res.status(400).json({ error: 'key, name, visitors required' });
   try {
-    console.log(`[Adopt] Creating segment "${name}" with ${visitors.length} visitors, sample: ${visitors[0]}`);
+    console.log(`[Adopt] Creating segment "${name}" with ${visitors.length} visitors`);
+    console.log(`[Adopt] Full visitors array: ${JSON.stringify(visitors)}`);
     const adoptHost = getAdoptHost(req);
     console.log(`[Adopt] POST ${adoptHost}/api/v1/segment/upload`);
     const r = await fetch(`${adoptHost}/api/v1/segment/upload`, {
@@ -170,10 +171,12 @@ router.post('/adopt/segments/create', async (req, res) => {
     });
     if (!r.ok) {
       const body = await r.text();
-      console.error(`[Adopt] Create failed ${r.status}: ${body.slice(0,300)}`);
-      return res.status(r.status).json({ error: `Pendo returned ${r.status}`, detail: body.slice(0,300) });
+      console.error(`[Adopt] Create failed ${r.status}: ${body.slice(0,500)}`);
+      return res.status(r.status).json({ error: `Pendo returned ${r.status}`, detail: body.slice(0,500) });
     }
-    res.json(await r.json());
+    const result = await r.json();
+    console.log(`[Adopt] Create success:`, JSON.stringify(result));
+    res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
