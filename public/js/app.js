@@ -82,11 +82,6 @@ document.addEventListener('DOMContentLoaded', () => {
     el('segCount').textContent = '';
   });
 
-  // Restore saved Adopt settings
-  const saved = JSON.parse(localStorage.getItem('adoptSettings') || '{}');
-  if (saved.key)  { el('adoptKey').value  = saved.key;  el('adoptKey2').value  = saved.key; }
-  if (saved.host) { el('adoptHost').value = saved.host; el('adoptHost2').value = saved.host; }
-
   setDot('ok');
 });
 
@@ -619,8 +614,8 @@ function promptForIntegrationKey() {
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function saveAdoptSettings() {
+  // Only persist the host, never the key
   localStorage.setItem('adoptSettings', JSON.stringify({
-    key:  el('adoptKey').value.trim(),
     host: el('adoptHost').value.trim()
   }));
 }
