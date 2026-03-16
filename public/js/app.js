@@ -3,13 +3,18 @@
 
 // ── UUID prefix — derived from LTI token, falls back to empty string ─────────
 function getUuidPrefix() {
+  // Return cached value first (set at page load)
+  if (window._uuidPrefix) return window._uuidPrefix;
   try {
     const token = getLtiToken();
     if (token) {
       const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
-      if (payload.uuidPrefix) return payload.uuidPrefix;
+      if (payload.uuidPrefix) {
+        window._uuidPrefix = payload.uuidPrefix;
+        return payload.uuidPrefix;
+      }
     }
-  } catch(e) {}
+  } catch(e) { console.warn('getUuidPrefix error:', e); }
   return '';
 }
 
@@ -109,6 +114,10 @@ document.addEventListener('DOMContentLoaded', () => {
     el('segmentMembersPanel').classList.add('hidden');
     el('segCount').textContent = '';
   });
+
+  // Warm UUID prefix cache immediately
+  window._uuidPrefix = getUuidPrefix();
+  console.log('[App] UUID prefix:', window._uuidPrefix || '(none yet)');
 
   setDot('ok');
 });

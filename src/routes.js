@@ -165,10 +165,8 @@ router.post('/adopt/segments/create', async (req, res) => {
     console.log(`[Adopt] Creating segment "${name}" with ${visitors.length} visitors, sample: ${visitors[0]}`);
     const adoptHost = getAdoptHost(req);
     console.log(`[Adopt] POST ${adoptHost}/api/v1/segment/upload`);
-    // Pendo requires visitors as a newline-delimited string, not an array
-    const visitorsStr = Array.isArray(visitors) ? visitors.join('\n') : visitors;
     const r = await fetch(`${adoptHost}/api/v1/segment/upload`, {
-      method: 'POST', headers: adoptHeaders(key), body: JSON.stringify({ name, visitors: visitorsStr })
+      method: 'POST', headers: adoptHeaders(key), body: JSON.stringify({ name, visitors })
     });
     if (!r.ok) {
       const body = await r.text();
@@ -186,9 +184,8 @@ router.put('/adopt/segments/:segmentId', async (req, res) => {
     console.log(`[Adopt] Updating segment ${req.params.segmentId} with ${visitors.length} visitors`);
     const adoptHost = getAdoptHost(req);
     console.log(`[Adopt] PUT ${adoptHost}/api/v1/segment/${req.params.segmentId}`);
-    const visitorsStr = Array.isArray(visitors) ? visitors.join('\n') : visitors;
     const r = await fetch(`${adoptHost}/api/v1/segment/${req.params.segmentId}`, {
-      method: 'PUT', headers: adoptHeaders(key), body: JSON.stringify({ visitors: visitorsStr })
+      method: 'PUT', headers: adoptHeaders(key), body: JSON.stringify({ visitors })
     });
     if (!r.ok) {
       const body = await r.text();
