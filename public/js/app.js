@@ -82,36 +82,6 @@ document.addEventListener('DOMContentLoaded', () => {
     el('segCount').textContent = '';
   });
 
-  // ── Breadcrumb: resolve Admin Panel URL from LTI token or referrer ───────────
-  (function() {
-    const link = el('adminPanelLink');
-    if (!link) return;
-    // Try to get BB host from the LTI token's iss claim
-    try {
-      const raw = getLtiToken();
-      if (raw) {
-        const parts = raw.split('.');
-        const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
-        // iss is https://blackboard.com — use document.referrer to get the actual host
-      }
-    } catch(e) {}
-    // Best source: document.referrer gives us the BB host
-    let bbHost = '';
-    try {
-      if (document.referrer) {
-        const u = new URL(document.referrer);
-        bbHost = u.origin;
-      }
-    } catch(e) {}
-    if (bbHost) {
-      link.href = `${bbHost}/webapps/portal/execute/tabs/tabAction?tabType=admin`;
-    } else {
-      // Fallback: navigate back in history
-      link.href = '#';
-      link.addEventListener('click', e => { e.preventDefault(); window.history.back(); });
-    }
-  })();
-
   setDot('ok');
 });
 
