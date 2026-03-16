@@ -2,7 +2,6 @@
 'use strict';
 
 // ── UUID prefix — derived from LTI token, falls back to empty string ─────────
-// The prefix is the BB site ID that Pendo prepends to all visitor IDs
 function getUuidPrefix() {
   try {
     const token = getLtiToken();
@@ -12,6 +11,23 @@ function getUuidPrefix() {
     }
   } catch(e) {}
   return '';
+}
+
+// Strip any prefix from a UUID — handles both prefixed and bare UUIDs
+// A BB UUID looks like: <siteUUID>_<userUUID>
+// We detect a prefix by checking if removing everything up to the last underscore
+// leaves something that looks like a UUID (8-4-4-4-12 hex pattern).
+function stripUuidPrefix(value) {
+  if (!value) return value;
+  const lastUnderscore = value.lastIndexOf('_');
+  if (lastUnderscore > 0) {
+    const candidate = value.slice(lastUnderscore + 1);
+    // Check if it looks like a UUID
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate)) {
+      return candidate;
+    }
+  }
+  return value;
 }
 
 
@@ -112,7 +128,9 @@ async function apiFetch(path, opts = {}) {
 // ── Single UUID lookup ────────────────────────────────────────────────────────
 async function lookupSingleUuid() {
   const raw  = el('uuidInput').value.trim();
-  const uuid = raw.replace(getUuidPrefix(), '');
+  // Strip prefix: if the value contains an underscore followed by a UUID-shaped segment,
+  // take only the part after the last underscore. Works whether or not LTI token is present.
+  const uuid = stripUuidPrefix(raw);
   const out  = el('uuidResult');
 
   if (!uuid) { out.innerHTML = '<span style="color:#dc2626">⚠ Paste a UUID to look up.</span>'; return; }
@@ -450,7 +468,7 @@ async function showSegmentMembers1() {
       tbody.innerHTML='<tr><td colspan="3" style="color:#9ca3af;text-align:center;padding:8px">This Segment Contains 0 Members</td></tr>';
       return;
     }
-    const members = rows.map(r=>({visitorId:r.visitorId||'',bareUuid:(r.visitorId||'').replace(getUuidPrefix(),''),username:null}));
+    const members = rows.map(r=>({visitorId:r.visitorId||'',bareUuid:stripUuidPrefix(r.visitorId||''),username:null}));
     const render  = ()=>{tbody.innerHTML=members.map((m,i)=>`<tr><td style="color:#9ca3af;width:36px;font-size:11px">${i+1}</td><td><span class="uuid-pill">${m.bareUuid}</span></td><td style="color:#374151;font-size:13px">${m.username||'<span style="color:#d1d5db">—</span>'}</td></tr>`).join('');};
     render();
     await enrichUsernames(members, render);
@@ -511,7 +529,7 @@ async function showSegmentMembers() {
       el('segmentMembersPanel').classList.remove('hidden');
       setAdoptStatus2('',''); return;
     }
-    const members=rows.map(r=>({visitorId:r.visitorId||'',bareUuid:(r.visitorId||'').replace(getUuidPrefix(),''),username:null}));
+    const members=rows.map(r=>({visitorId:r.visitorId||'',bareUuid:stripUuidPrefix(r.visitorId||''),username:null}));
     const render=()=>{tbody.innerHTML=members.map((m,i)=>`<tr><td style="color:#9ca3af;width:36px;font-size:11px">${i+1}</td><td><span class="uuid-pill">${m.bareUuid}</span></td><td style="color:#374151;font-size:13px">${m.username||'<span style="color:#d1d5db">—</span>'}</td></tr>`).join('');};
     render();
     el('segCount').textContent=`${rows.length} visitor(s) in this segment`;
