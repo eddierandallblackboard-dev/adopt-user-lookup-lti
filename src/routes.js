@@ -105,8 +105,15 @@ router.get('/bb/user/uuid/:uuid', async (req, res) => {
   try {
     const { url } = bbConfig(req);
     const token = await getBbToken(req);
-    const r = await fetch(`${url}/learn/api/public/v1/users/uuid:${encodeURIComponent(req.params.uuid)}?fields=uuid,userName,name.given,name.family,contact.email`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!r.ok) return res.status(r.status).json({ error: `BB returned ${r.status}` });
+    const uuid = req.params.uuid;
+    const fullUrl = `${url}/learn/api/public/v1/users/uuid:${encodeURIComponent(uuid)}?fields=uuid,userName,name.given,name.family,contact.email`;
+    console.log(`[BB] UUID lookup: ${fullUrl}`);
+    const r = await fetch(fullUrl, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) {
+      const body = await r.text();
+      console.error(`[BB] UUID lookup failed ${r.status}: ${body.slice(0, 300)}`);
+      return res.status(r.status).json({ error: `BB returned ${r.status}`, detail: body.slice(0, 300) });
+    }
     res.json(await r.json());
   } catch (err) {
     console.error('[BB] uuid lookup error:', err.message);

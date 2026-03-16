@@ -151,7 +151,7 @@ async function lookupSingleUuid() {
           <span style="font-family:'Courier New',monospace;font-size:11px;color:#9ca3af">${uuid}</span>
         </div>`;
     } else if (r.status === 404) {
-      out.innerHTML = '<span style="color:#b45309">⚠ No user found for this UUID.</span>';
+      out.innerHTML = `<span style="color:#b45309">⚠ No user found for UUID: <code style="font-size:11px">${uuid}</code></span>`;
     } else {
       out.innerHTML = `<span style="color:#dc2626">✗ Error ${r.status}</span>`;
     }
