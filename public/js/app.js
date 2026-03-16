@@ -441,6 +441,13 @@ async function loadSegmentsForPanel1() {
     sel.innerHTML = segments.length
       ? ['<option value="">— Select existing segment to update —</option>',...segments.map(s=>`<option value="${s.id}">${s.name}</option>`)].join('')
       : '<option value="">— no API-created segments found —</option>';
+    // Show or hide the "Update existing segment" radio based on whether segments exist
+    el('adoptModeLabelUpdate').style.display = segments.length ? 'flex' : 'none';
+    if (!segments.length && el('adoptModeUpdate').checked) {
+      el('adoptModeCreate').checked = true;
+      el('adoptCreateRow').style.display = '';
+      el('adoptUpdateRow').style.display = 'none';
+    }
     setAdoptStatus(segments.length?`✓ ${segments.length} segment(s) loaded`:'No API-created segments found.',segments.length?'ok':'');
   } catch(err) {
     sel.innerHTML='<option value="">— error loading segments —</option>';
