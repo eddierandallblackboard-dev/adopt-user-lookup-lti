@@ -160,15 +160,22 @@ app.post('/lti/launch', async (req, res) => {
 
     if (!consumeNonce(payload.nonce)) return res.status(400).send('Invalid or replayed nonce');
 
-    // Sign our own app token — passed in URL, stored in localStorage by the frontend
-    // This completely bypasses cookie/session issues with Blackboard iframes
+    // Derive UUID prefix from the sub claim: sub looks like "<prefix>_<uuid>"
+    // The prefix is shared across all users on the same BB instance
+    const sub = payload.sub || '';
+    const lastUnderscore = sub.lastIndexOf('_');
+    const uuidPrefix = lastUnderscore > 0 ? sub.slice(0, lastUnderscore + 1) : '';
+    console.log(`[LTI] Derived UUID prefix: ${uuidPrefix}`);
+
     const appToken = await signAppToken({
-      sub:     payload.sub,
-      name:    payload.name,
-      email:   payload.email,
-      roles:   payload['https://purl.imsglobal.org/spec/lti/claim/roles'] || [],
-      context: payload['https://purl.imsglobal.org/spec/lti/claim/context'],
-      iss:     payload.iss,
+      sub:       sub,
+      name:      payload.name,
+      email:     payload.email,
+      roles:     payload['https://purl.imsglobal.org/spec/lti/claim/roles'] || [],
+      context:   payload['https://purl.imsglobal.org/spec/lti/claim/context'],
+      iss:       payload.iss,
+      uuidPrefix: uuidPrefix,
+      bbHost:     process.env.BB_HOST || '',
     });
 
     console.log(`[LTI] Launch success — sub=${payload.sub}`);

@@ -1,8 +1,18 @@
 // app.js — Adopt User Lookup LTI frontend
 'use strict';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-const UUID_PREFIX = 'baed9e72-f471-4334-9064-53ce81bd4a56_';
+// ── UUID prefix — derived from LTI token, falls back to empty string ─────────
+// The prefix is the BB site ID that Pendo prepends to all visitor IDs
+function getUuidPrefix() {
+  try {
+    const token = getLtiToken();
+    if (token) {
+      const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+      if (payload.uuidPrefix) return payload.uuidPrefix;
+    }
+  } catch(e) {}
+  return '';
+}
 
 
 // ── LTI auth token (stored in sessionStorage after launch) ────────────────────
@@ -102,7 +112,7 @@ async function apiFetch(path, opts = {}) {
 // ── Single UUID lookup ────────────────────────────────────────────────────────
 async function lookupSingleUuid() {
   const raw  = el('uuidInput').value.trim();
-  const uuid = raw.replace(UUID_PREFIX, '');
+  const uuid = raw.replace(getUuidPrefix(), '');
   const out  = el('uuidResult');
 
   if (!uuid) { out.innerHTML = '<span style="color:#dc2626">⚠ Paste a UUID to look up.</span>'; return; }
@@ -179,10 +189,10 @@ async function lookupEmail(email) {
   if (!r.ok) return { email: clean, uuid:'', status: r.status===403?'forbidden':'network_error' };
 
   const users = r.data?.users || [];
-  if (users.length === 1) return { email:clean, uuid: UUID_PREFIX + users[0].uuid, status:'found' };
+  if (users.length === 1) return { email:clean, uuid: getUuidPrefix() + users[0].uuid, status:'found' };
   if (users.length > 1)  {
     const chosen = await showUserPicker(clean, users);
-    if (chosen) return { email:clean, uuid: UUID_PREFIX + chosen.uuid, status:'found' };
+    if (chosen) return { email:clean, uuid: getUuidPrefix() + chosen.uuid, status:'found' };
     return { email:clean, uuid:'', status:'skipped' };
   }
   return { email:clean, uuid:'', status:'not_found' };
@@ -440,7 +450,7 @@ async function showSegmentMembers1() {
       tbody.innerHTML='<tr><td colspan="3" style="color:#9ca3af;text-align:center;padding:8px">This Segment Contains 0 Members</td></tr>';
       return;
     }
-    const members = rows.map(r=>({visitorId:r.visitorId||'',bareUuid:(r.visitorId||'').replace(UUID_PREFIX,''),username:null}));
+    const members = rows.map(r=>({visitorId:r.visitorId||'',bareUuid:(r.visitorId||'').replace(getUuidPrefix(),''),username:null}));
     const render  = ()=>{tbody.innerHTML=members.map((m,i)=>`<tr><td style="color:#9ca3af;width:36px;font-size:11px">${i+1}</td><td><span class="uuid-pill">${m.bareUuid}</span></td><td style="color:#374151;font-size:13px">${m.username||'<span style="color:#d1d5db">—</span>'}</td></tr>`).join('');};
     render();
     await enrichUsernames(members, render);
@@ -501,7 +511,7 @@ async function showSegmentMembers() {
       el('segmentMembersPanel').classList.remove('hidden');
       setAdoptStatus2('',''); return;
     }
-    const members=rows.map(r=>({visitorId:r.visitorId||'',bareUuid:(r.visitorId||'').replace(UUID_PREFIX,''),username:null}));
+    const members=rows.map(r=>({visitorId:r.visitorId||'',bareUuid:(r.visitorId||'').replace(getUuidPrefix(),''),username:null}));
     const render=()=>{tbody.innerHTML=members.map((m,i)=>`<tr><td style="color:#9ca3af;width:36px;font-size:11px">${i+1}</td><td><span class="uuid-pill">${m.bareUuid}</span></td><td style="color:#374151;font-size:13px">${m.username||'<span style="color:#d1d5db">—</span>'}</td></tr>`).join('');};
     render();
     el('segCount').textContent=`${rows.length} visitor(s) in this segment`;

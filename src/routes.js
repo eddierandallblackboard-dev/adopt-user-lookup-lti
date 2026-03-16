@@ -5,11 +5,14 @@ const router  = express.Router();
 const ADOPT_HOST = (process.env.ADOPT_HOST || 'https://app.pendo.io').replace(/\/$/, '');
 
 // Read BB vars lazily so missing env vars show up clearly in errors
-function bbConfig() {
-  const url    = (process.env.BB_HOST || '').replace(/\/$/, '');
+function bbConfig(req) {
+  // Prefer bbHost from the LTI token (future multi-tenant support),
+  // fall back to BB_HOST env var
+  const tokenHost = req?.ltiUser?.bbHost || '';
+  const url    = (tokenHost || process.env.BB_HOST || '').replace(/\/$/, '');
   const id     = process.env.BB_CLIENT_ID;
   const secret = process.env.BB_CLIENT_SECRET;
-  if (!url)    throw new Error('BB_HOST env var is not set');
+  if (!url)    throw new Error('BB_HOST is not set (check env vars or LTI token)');
   if (!id)     throw new Error('BB_CLIENT_ID env var is not set');
   if (!secret) throw new Error('BB_CLIENT_SECRET env var is not set');
   return { url, id, secret };
@@ -18,9 +21,9 @@ function bbConfig() {
 // ── BB token cache ────────────────────────────────────────────────────────────
 let bbTokenCache = { token: null, expires: 0 };
 
-async function getBbToken() {
+async function getBbToken(req) {
   if (bbTokenCache.token && bbTokenCache.expires > Date.now()) return bbTokenCache.token;
-  const { url, id, secret } = bbConfig();
+  const { url, id, secret } = bbConfig(req);
   console.log(`[BB] Fetching token from ${url}`);
   const credentials = Buffer.from(`${id}:${secret}`).toString('base64');
   const resp = await fetch(`${url}/learn/api/public/v1/oauth2/token`, {
@@ -66,8 +69,8 @@ router.get('/bb/user', async (req, res) => {
   if (!email) return res.status(400).json({ error: 'email required' });
   const fields = 'uuid,userName,name.given,name.family,contact.email';
   try {
-    const token = await getBbToken();
-    const { url } = bbConfig();
+    const { url } = bbConfig(req);
+    const token = await getBbToken(req);
 
     // Strategy 1: search endpoint
     const s1 = await fetch(`${url}/learn/api/public/v1/users?contact.email=${encodeURIComponent(email)}&fields=${fields}&limit=50`, { headers: { Authorization: `Bearer ${token}` } });
@@ -100,8 +103,8 @@ router.get('/bb/user', async (req, res) => {
 // GET /api/bb/user/uuid/:uuid
 router.get('/bb/user/uuid/:uuid', async (req, res) => {
   try {
-    const token = await getBbToken();
-    const { url } = bbConfig();
+    const { url } = bbConfig(req);
+    const token = await getBbToken(req);
     const r = await fetch(`${url}/learn/api/public/v1/users/uuid:${encodeURIComponent(req.params.uuid)}?fields=uuid,userName,name.given,name.family,contact.email`, { headers: { Authorization: `Bearer ${token}` } });
     if (!r.ok) return res.status(r.status).json({ error: `BB returned ${r.status}` });
     res.json(await r.json());
