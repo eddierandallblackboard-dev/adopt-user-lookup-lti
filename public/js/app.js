@@ -104,7 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch(e) {}
     if (bbHost) {
-      link.href = `${bbHost}/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1`;
+      link.href = `${bbHost}/webapps/portal/execute/tabs/tabAction?tabType=admin`;
     } else {
       // Fallback: navigate back in history
       link.href = '#';
