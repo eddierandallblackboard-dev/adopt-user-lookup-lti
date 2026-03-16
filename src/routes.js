@@ -153,10 +153,18 @@ router.post('/adopt/segments/create', async (req, res) => {
   const { key, name, visitors } = req.body;
   if (!key || !name || !visitors) return res.status(400).json({ error: 'key, name, visitors required' });
   try {
+    // Pendo expects visitors as array of objects: [{visitorId: "..."}]
+    const visitorObjects = visitors.map(v => typeof v === 'string' ? { visitorId: v } : v);
+    console.log(`[Adopt] Creating segment "${name}" with ${visitorObjects.length} visitors`);
+    console.log(`[Adopt] Sample visitor: ${JSON.stringify(visitorObjects[0])}`);
     const r = await fetch(`${ADOPT_HOST}/api/v1/segment/upload`, {
-      method: 'POST', headers: adoptHeaders(key), body: JSON.stringify({ name, visitors })
+      method: 'POST', headers: adoptHeaders(key), body: JSON.stringify({ name, visitors: visitorObjects })
     });
-    if (!r.ok) return res.status(r.status).json({ error: `Pendo returned ${r.status}` });
+    if (!r.ok) {
+      const body = await r.text();
+      console.error(`[Adopt] Create failed ${r.status}: ${body.slice(0,300)}`);
+      return res.status(r.status).json({ error: `Pendo returned ${r.status}`, detail: body.slice(0,300) });
+    }
     res.json(await r.json());
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -165,10 +173,16 @@ router.put('/adopt/segments/:segmentId', async (req, res) => {
   const { key, visitors } = req.body;
   if (!key || !visitors) return res.status(400).json({ error: 'key and visitors required' });
   try {
+    // Pendo expects visitors as array of objects: [{visitorId: "..."}]
+    const visitorObjects = visitors.map(v => typeof v === 'string' ? { visitorId: v } : v);
     const r = await fetch(`${ADOPT_HOST}/api/v1/segment/${req.params.segmentId}`, {
-      method: 'PUT', headers: adoptHeaders(key), body: JSON.stringify({ visitors })
+      method: 'PUT', headers: adoptHeaders(key), body: JSON.stringify({ visitors: visitorObjects })
     });
-    if (!r.ok) return res.status(r.status).json({ error: `Pendo returned ${r.status}` });
+    if (!r.ok) {
+      const body = await r.text();
+      console.error(`[Adopt] Update failed ${r.status}: ${body.slice(0,300)}`);
+      return res.status(r.status).json({ error: `Pendo returned ${r.status}`, detail: body.slice(0,300) });
+    }
     res.json(await r.json());
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
