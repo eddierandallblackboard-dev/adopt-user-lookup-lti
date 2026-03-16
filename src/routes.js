@@ -2,7 +2,13 @@ const express = require('express');
 const fetch   = require('node-fetch');
 const router  = express.Router();
 
-const ADOPT_HOST = (process.env.ADOPT_HOST || 'https://app.pendo.io').replace(/\/$/, '');
+const DEFAULT_ADOPT_HOST = (process.env.ADOPT_HOST || 'https://app.pendo.io').replace(/\/$/, '');
+
+function getAdoptHost(req) {
+  // Use host from request if provided, fall back to env var
+  const h = req.body?.adoptHost || req.query?.adoptHost || '';
+  return (h || DEFAULT_ADOPT_HOST).replace(/\/$/, '');
+}
 
 // Read BB vars lazily so missing env vars show up clearly in errors
 function bbConfig(req) {
@@ -129,8 +135,10 @@ router.get('/adopt/segments', async (req, res) => {
   const { key, createdByApi } = req.query;
   if (!key) return res.status(400).json({ error: 'key required' });
   try {
+    const host = getAdoptHost(req);
     const qs = createdByApi !== undefined ? `?createdByApi=${createdByApi}` : '';
-    const r  = await fetch(`${ADOPT_HOST}/api/v1/segment${qs}`, { headers: adoptHeaders(key) });
+    console.log(`[Adopt] GET segments from ${host}`);
+    const r  = await fetch(`${host}/api/v1/segment${qs}`, { headers: adoptHeaders(key) });
     if (!r.ok) return res.status(r.status).json({ error: `Pendo returned ${r.status}` });
     res.json(await r.json());
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -140,7 +148,8 @@ router.post('/adopt/segments/members', async (req, res) => {
   const { key, segmentId } = req.body;
   if (!key || !segmentId) return res.status(400).json({ error: 'key and segmentId required' });
   try {
-    const r = await fetch(`${ADOPT_HOST}/api/v1/aggregation`, {
+    const host = getAdoptHost(req);
+    const r = await fetch(`${host}/api/v1/aggregation`, {
       method: 'POST', headers: adoptHeaders(key),
       body: JSON.stringify({ response: { mimeType: 'application/json' }, request: { pipeline: [{ source: { visitors: null } }, { segment: { id: segmentId } }, { select: { visitorId: 'visitorId' } }] } })
     });
@@ -153,12 +162,13 @@ router.post('/adopt/segments/create', async (req, res) => {
   const { key, name, visitors } = req.body;
   if (!key || !name || !visitors) return res.status(400).json({ error: 'key, name, visitors required' });
   try {
-    // Pendo expects visitors as array of objects: [{visitorId: "..."}]
-    const visitorObjects = visitors.map(v => typeof v === 'string' ? { visitorId: v } : v);
-    console.log(`[Adopt] Creating segment "${name}" with ${visitorObjects.length} visitors`);
-    console.log(`[Adopt] Sample visitor: ${JSON.stringify(visitorObjects[0])}`);
-    const r = await fetch(`${ADOPT_HOST}/api/v1/segment/upload`, {
-      method: 'POST', headers: adoptHeaders(key), body: JSON.stringify({ name, visitors: visitorObjects })
+    console.log(`[Adopt] Creating segment "${name}" with ${visitors.length} visitors, sample: ${visitors[0]}`);
+    const adoptHost = getAdoptHost(req);
+    console.log(`[Adopt] POST ${adoptHost}/api/v1/segment/upload`);
+    // Pendo requires visitors as a newline-delimited string, not an array
+    const visitorsStr = Array.isArray(visitors) ? visitors.join('\n') : visitors;
+    const r = await fetch(`${adoptHost}/api/v1/segment/upload`, {
+      method: 'POST', headers: adoptHeaders(key), body: JSON.stringify({ name, visitors: visitorsStr })
     });
     if (!r.ok) {
       const body = await r.text();
@@ -173,10 +183,12 @@ router.put('/adopt/segments/:segmentId', async (req, res) => {
   const { key, visitors } = req.body;
   if (!key || !visitors) return res.status(400).json({ error: 'key and visitors required' });
   try {
-    // Pendo expects visitors as array of objects: [{visitorId: "..."}]
-    const visitorObjects = visitors.map(v => typeof v === 'string' ? { visitorId: v } : v);
-    const r = await fetch(`${ADOPT_HOST}/api/v1/segment/${req.params.segmentId}`, {
-      method: 'PUT', headers: adoptHeaders(key), body: JSON.stringify({ visitors: visitorObjects })
+    console.log(`[Adopt] Updating segment ${req.params.segmentId} with ${visitors.length} visitors`);
+    const adoptHost = getAdoptHost(req);
+    console.log(`[Adopt] PUT ${adoptHost}/api/v1/segment/${req.params.segmentId}`);
+    const visitorsStr = Array.isArray(visitors) ? visitors.join('\n') : visitors;
+    const r = await fetch(`${adoptHost}/api/v1/segment/${req.params.segmentId}`, {
+      method: 'PUT', headers: adoptHeaders(key), body: JSON.stringify({ visitors: visitorsStr })
     });
     if (!r.ok) {
       const body = await r.text();
@@ -191,6 +203,7 @@ router.get('/adopt/status', async (req, res) => {
   const { url, key } = req.query;
   if (!url || !key) return res.status(400).json({ error: 'url and key required' });
   try {
+    console.log(`[Adopt] Status poll: ${url}`);
     const r = await fetch(url, { headers: { 'x-pendo-integration-key': key } });
     if (!r.ok) return res.status(r.status).json({ error: `Pendo returned ${r.status}` });
     res.json(await r.json());

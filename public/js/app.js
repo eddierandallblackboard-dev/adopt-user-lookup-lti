@@ -366,7 +366,7 @@ async function pushToAdopt() {
   try {
     const r = await apiFetch('/api/adopt/segments/create',{
       method:'POST',
-      body:JSON.stringify({key, name, visitors:uuids})
+      body:JSON.stringify({key, name, visitors:uuids, adoptHost:el('adoptHost').value.trim()||'https://app.pendo.io'})
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const { statusUrl } = r.data;
@@ -403,7 +403,7 @@ async function updateAdoptSegment() {
     // Get existing members
     const mem = await apiFetch('/api/adopt/segments/members',{
       method:'POST',
-      body:JSON.stringify({key,segmentId:segId})
+      body:JSON.stringify({key,segmentId:segId,adoptHost:el('adoptHost').value.trim()||'https://app.pendo.io'})
     });
     const existing = mem.ok ? (mem.data?.results||[]).map(r=>r.visitorId).filter(Boolean) : [];
     const merged   = [...new Set([...existing,...newUuids])];
@@ -412,7 +412,7 @@ async function updateAdoptSegment() {
     setAdoptStatus(`Merging ${existing.length} existing + ${added} new…`,'');
     const r = await apiFetch(`/api/adopt/segments/${segId}`,{
       method:'PUT',
-      body:JSON.stringify({key,visitors:merged})
+      body:JSON.stringify({key,visitors:merged,adoptHost:el('adoptHost').value.trim()||'https://app.pendo.io'})
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     setAdoptStatus(`✓ Appended ${added} visitor${added!==1?'s':''} — ${merged.length} total. Processing…`,'ok');
@@ -434,7 +434,7 @@ async function loadSegmentsForPanel1() {
   setAdoptStatus('Fetching segments…','');
 
   try {
-    const r = await apiFetch(`/api/adopt/segments?key=${encodeURIComponent(key)}&createdByApi=true`);
+    const r = await apiFetch(`/api/adopt/segments?key=${encodeURIComponent(key)}&createdByApi=true&adoptHost=${encodeURIComponent(el('adoptHost').value.trim()||'https://app.pendo.io')}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const segments = (Array.isArray(r.data)?r.data:(r.data?.results||[])).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
     window._adoptSegments = segments;
@@ -497,7 +497,7 @@ async function loadSegments() {
   el('loadSegmentsBtn').disabled=true; el('loadSegmentsBtn').textContent='Loading…';
   setAdoptStatus2('Fetching segments…','');
   try {
-    const r = await apiFetch(`/api/adopt/segments?key=${encodeURIComponent(key)}`);
+    const r = await apiFetch(`/api/adopt/segments?key=${encodeURIComponent(key)}&adoptHost=${encodeURIComponent(el('adoptHost2').value.trim()||'https://app.pendo.io')}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const segments = Array.isArray(r.data)?r.data:(r.data?.results||[]);
     const sel = el('segmentSelect');
@@ -574,7 +574,7 @@ async function pollAdoptStatus(statusUrl, key, statusFn) {
   for (let i=0;i<20;i++) {
     await new Promise(r=>setTimeout(r,5000));
     try {
-      const r = await apiFetch(`/api/adopt/status?url=${encodeURIComponent(statusUrl)}&key=${encodeURIComponent(key)}`);
+      const r = await apiFetch(`/api/adopt/status?url=${encodeURIComponent(statusUrl)}&key=${encodeURIComponent(key)}&adoptHost=${encodeURIComponent(el('adoptHost').value.trim()||'https://app.pendo.io')}`);
       if (!r.ok) break;
       const cmd=(r.data?.command||'').toLowerCase();
       if (cmd==='finish') { statusFn(`✓ Done! ${r.data?.totalTagged??'?'} visitor(s) added to segment.`,'ok'); return; }
