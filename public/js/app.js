@@ -23,7 +23,9 @@ function stripUuidPrefix(value) {
   if (lastUnderscore > 0) {
     const candidate = value.slice(lastUnderscore + 1);
     // Check if it looks like a UUID
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate)) {
+    // Matches both dashed UUID (8-4-4-4-12) and compact 32-char hex (no dashes)
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate) ||
+        /^[0-9a-f]{32}$/i.test(candidate)) {
       return candidate;
     }
   }
