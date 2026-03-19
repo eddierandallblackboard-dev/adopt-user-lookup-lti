@@ -106,6 +106,24 @@ router.get('/bb/user', async (req, res) => {
   }
 });
 
+// GET /api/bb/user/username/:username
+router.get('/bb/user/username/:username', async (req, res) => {
+  try {
+    const { url } = bbConfig(req);
+    const token = await getBbToken(req);
+    const username = req.params.username;
+    const r = await fetch(
+      `${url}/learn/api/public/v1/users/userName:${encodeURIComponent(username)}?fields=uuid,userName,name.given,name.family,contact.email`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!r.ok) return res.status(r.status).json({ error: `BB returned ${r.status}` });
+    res.json(await r.json());
+  } catch (err) {
+    console.error('[BB] username lookup error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/bb/user/uuid/:uuid
 router.get('/bb/user/uuid/:uuid', async (req, res) => {
   try {

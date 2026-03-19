@@ -28,6 +28,20 @@
 
     <div class="error-bar" id="errorBar"></div>
 
+    <!-- Reverse lookup: username/email → Adopt Visitor ID -->
+    <div class="panel">
+      <h2>User → Adopt Visitor ID</h2>
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <div class="field" style="flex:1;margin-bottom:0">
+          <label>Username or Email</label>
+          <input type="text" id="reverseInput" placeholder="username or email address…"/>
+        </div>
+        <button class="btn-primary" id="reverseLookupBtn">Look Up →</button>
+        <button class="btn-ghost" id="reverseResetBtn">↺ Reset</button>
+      </div>
+      <div id="reverseResult" style="margin-top:8px;font-size:13px;min-height:18px"></div>
+    </div>
+
     <!-- Single UUID lookup -->
     <div class="panel">
       <h2>UUID → Username Lookup</h2>
@@ -109,10 +123,7 @@
             <input type="password" id="adoptKey" placeholder="Paste your integration key"/>
           </div>
         </div>
-        <div class="field" style="margin-bottom:0">
-          <label>Blackboard Site ID <span style="font-weight:400;color:#9ca3af;font-size:11px">— BB Admin → Cloud Management → Adopt → Site UUID</span></label>
-          <input type="text" id="adoptSiteId" placeholder="e.g. baed9e72-f471-4334-9064-53ce81bd4a56" style="font-family:'Courier New',monospace;font-size:12px"/>
-        </div>
+        <input type="hidden" id="adoptSiteId"/>
         <div style="display:flex;gap:8px;align-items:center">
           <label style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap" id="adoptModeLabelCreate">
             <input type="radio" name="adoptMode" id="adoptModeCreate" value="create" checked/>Create new segment

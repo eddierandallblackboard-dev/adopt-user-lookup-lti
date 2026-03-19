@@ -92,6 +92,9 @@ document.addEventListener('DOMContentLoaded', () => {
   el('stopBtn').addEventListener('click', () => { aborted = true; });
   el('resetBtn').addEventListener('click', resetAll);
   el('dlBtn').addEventListener('click', exportCSV);
+  el('reverseLookupBtn').addEventListener('click', lookupByUserOrEmail);
+  el('reverseResetBtn').addEventListener('click', () => { el('reverseInput').value=''; el('reverseResult').innerHTML=''; });
+  el('reverseInput').addEventListener('keydown', e => { if(e.key==='Enter') lookupByUserOrEmail(); });
   el('uuidLookupBtn').addEventListener('click', lookupSingleUuid);
   el('uuidResetBtn').addEventListener('click', () => { el('uuidInput').value=''; el('uuidResult').innerHTML=''; });
   el('uuidInput').addEventListener('keydown', e => { if(e.key==='Enter') lookupSingleUuid(); });
@@ -148,6 +151,64 @@ async function autoDiscoverSiteId(key) {
       console.log('[App] Auto-discovered site ID:', siteId);
     }
   } catch(e) { console.warn('[App] autoDiscoverSiteId error:', e); }
+}
+
+// ── Reverse lookup: username or email → Adopt Visitor ID ─────────────────────
+async function lookupByUserOrEmail() {
+  const raw = el('reverseInput').value.trim();
+  const out = el('reverseResult');
+  if (!raw) { out.innerHTML = '<span style="color:#dc2626">⚠ Enter a username or email address.</span>'; return; }
+
+  out.innerHTML = '<span style="color:#6b7280">Looking up…</span>';
+  el('reverseLookupBtn').disabled = true;
+
+  try {
+    // Determine lookup strategy: if it contains @ treat as email, otherwise try userName
+    const isEmail = raw.includes('@');
+    const url = isEmail
+      ? `/api/bb/user?email=${encodeURIComponent(raw)}`
+      : `/api/bb/user/username/${encodeURIComponent(raw)}`;
+
+    const r = await apiFetch(url);
+    let user = null;
+
+    if (isEmail) {
+      const users = r.ok ? (r.data?.users || []) : [];
+      if (users.length === 1) user = users[0];
+      else if (users.length > 1) user = await showUserPicker(raw, users);
+    } else {
+      user = r.ok ? r.data : null;
+    }
+
+    if (!user?.uuid) {
+      out.innerHTML = `<span style="color:#b45309">⚠ No user found for <strong>${raw}</strong></span>`;
+      return;
+    }
+
+    const prefix = getUuidPrefix();
+    const visitorId = prefix ? prefix + user.uuid : user.uuid;
+    const fullName = [user.name?.given, user.name?.family].filter(Boolean).join(' ');
+    const email = user.contact?.email || '';
+
+    out.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:6px;padding:10px;background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:7px">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+          <span style="font-weight:700;color:#15803d">${user.userName}</span>
+          ${fullName ? `<span style="color:#374151">${fullName}</span>` : ''}
+          ${email ? `<span style="color:#6b7280;font-size:12px">${email}</span>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:11px;color:#6b7280;font-weight:600;white-space:nowrap">Adopt Visitor ID</span>
+          <span id="visitorIdDisplay" style="font-family:'Courier New',monospace;font-size:12px;color:#1d4ed8;background:#eff6ff;padding:3px 8px;border-radius:4px;border:1px solid #bfdbfe;word-break:break-all">${visitorId}</span>
+          <button onclick="navigator.clipboard.writeText('${visitorId}').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='Copy',1500)})" style="padding:3px 8px;font-size:11px;background:#1d4ed8;color:#fff;border:none;border-radius:4px;cursor:pointer;flex-shrink:0">Copy</button>
+        </div>
+        ${!prefix ? '<div style="font-size:11px;color:#b45309">⚠ Pendo Site ID not yet discovered — enter your Adopt integration key and load segments first</div>' : ''}
+      </div>`;
+  } catch(e) {
+    out.innerHTML = `<span style="color:#dc2626">✗ ${e.message}</span>`;
+  } finally {
+    el('reverseLookupBtn').disabled = false;
+  }
 }
 
 // ── Single UUID lookup ────────────────────────────────────────────────────────
