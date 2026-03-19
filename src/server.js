@@ -165,7 +165,8 @@ app.post('/lti/launch', async (req, res) => {
     const sub = payload.sub || '';
     const lastUnderscore = sub.lastIndexOf('_');
     const uuidPrefix = lastUnderscore > 0 ? sub.slice(0, lastUnderscore + 1) : '';
-    console.log(`[LTI] Derived UUID prefix: ${uuidPrefix}`);
+    console.log(`[LTI] sub claim: ${sub}`);
+    console.log(`[LTI] Derived UUID prefix: '${uuidPrefix}'`);
 
     const appToken = await signAppToken({
       sub:       sub,
