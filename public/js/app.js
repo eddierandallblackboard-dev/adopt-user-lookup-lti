@@ -394,16 +394,21 @@ function resetAll() {
 async function pushToAdopt() {
   const key  = el('adoptKey').value.trim();
   const name = el('adoptSegmentName').value.trim();
-  const uuids= results.filter(r=>r._uuid).map(r=>r._uuid);
+  // Apply prefix at push time — UUIDs in results may be bare if prefix wasn't known during lookup
+  const prefix = getUuidPrefix();
+  const uuids = results.filter(r=>r._uuid).map(r => {
+    const bare = stripUuidPrefix(r._uuid);
+    return prefix ? prefix + bare : bare;
+  });
+  console.log('[App] Push UUIDs sample:', uuids[0], '| prefix:', prefix);
 
   if (!key)   { setAdoptStatus('Integration key is required.','err'); return; }
   if (!name)  { setAdoptStatus('Segment name is required.','err'); return; }
   if (!uuids.length) { setAdoptStatus('No UUIDs to push.','err'); return; }
-  // Ensure prefix is known before pushing
-  if (!window._uuidPrefix) {
-    setAdoptStatus('Discovering visitor ID prefix…','');
-    await discoverPrefixFromPendo(key);
-  }
+  // Ensure prefix is known before pushing — always try since it may have changed
+  setAdoptStatus('Discovering visitor ID prefix…','');
+  await discoverPrefixFromPendo(key);
+  console.log('[App] Prefix before push:', getUuidPrefix());
 
   // Duplicate check
   const existing = (window._adoptSegments||[]).filter(s=>(s.name||'').toLowerCase()===name.toLowerCase());
@@ -448,7 +453,11 @@ async function updateAdoptSegment() {
   const key      = el('adoptKey').value.trim();
   const segId    = el('adoptSegmentSelect').value;
   const segName  = el('adoptSegmentSelect').options[el('adoptSegmentSelect').selectedIndex]?.text||'';
-  const newUuids = results.filter(r=>r._uuid).map(r=>r._uuid);
+  const prefix = getUuidPrefix();
+  const newUuids = results.filter(r=>r._uuid).map(r => {
+    const bare = stripUuidPrefix(r._uuid);
+    return prefix ? prefix + bare : bare;
+  });
 
   if (!key)    { setAdoptStatus('Integration key is required.','err'); return; }
   if (!segId)  { setAdoptStatus('Select a segment to update.','err'); return; }
