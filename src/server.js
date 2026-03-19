@@ -180,20 +180,22 @@ app.post('/lti/launch', async (req, res) => {
 
     console.log(`[LTI] Launch success — sub=${payload.sub}`);
 
-    // Pass token in URL hash — never sent to server, readable by frontend before sessionStorage
     const tokenJson = JSON.stringify(appToken);
+    const prefixJson = JSON.stringify(uuidPrefix);
     res.send(`<!DOCTYPE html>
 <html>
 <head><title>Launching…</title></head>
 <body>
 <script>
   var token = ${tokenJson};
-  // Try sessionStorage first, fall back silently
+  var prefix = ${prefixJson};
+  // Store token everywhere we can
   try { sessionStorage.setItem('lti_token', token); } catch(e) {}
-  // Also store in window.name which survives cross-origin iframe navigation
-  try { window.name = 'lti_token:' + token; } catch(e) {}
-  // Pass token in hash so /app can read it even if sessionStorage is blocked
-  window.location.replace('/app#t=' + encodeURIComponent(token));
+  try { sessionStorage.setItem('lti_uuid_prefix', prefix); } catch(e) {}
+  // window.name survives cross-origin iframe navigation
+  try { window.name = JSON.stringify({ token: token, prefix: prefix }); } catch(e) {}
+  // Pass both in hash — /app reads this before anything else
+  window.location.replace('/app#t=' + encodeURIComponent(token) + '&p=' + encodeURIComponent(prefix));
 </script>
 <p>Launching… <a href="/app">click here if not redirected</a></p>
 </body>
@@ -225,6 +227,16 @@ async function requireLti(req, res, next) {
 
 // ── App shell — no auth needed, frontend handles it ──────────────────────────
 app.get('/app', (_, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+
+// ── /api/me — returns session claims including uuidPrefix ────────────────────
+app.get('/api/me', requireLti, (req, res) => {
+  res.json({
+    uuidPrefix: req.ltiUser?.uuidPrefix || '',
+    bbHost:     req.ltiUser?.bbHost || '',
+    name:       req.ltiUser?.name || '',
+    email:      req.ltiUser?.email || '',
+  });
+});
 
 // ── API routes — protected by Bearer token ────────────────────────────────────
 app.use('/api', requireLti, routes);

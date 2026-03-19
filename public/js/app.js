@@ -1,21 +1,27 @@
 // app.js — Adopt User Lookup LTI frontend
 'use strict';
 
-// ── UUID prefix — derived from LTI token, falls back to empty string ─────────
+// ── UUID prefix ───────────────────────────────────────────────────────────────
 function getUuidPrefix() {
-  // Return cached value first (set at page load)
   if (window._uuidPrefix) return window._uuidPrefix;
-  try {
-    const token = getLtiToken();
-    if (token) {
-      const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
-      if (payload.uuidPrefix) {
-        window._uuidPrefix = payload.uuidPrefix;
-        return payload.uuidPrefix;
-      }
-    }
-  } catch(e) { console.warn('getUuidPrefix error:', e); }
+  // Fallback: try sessionStorage
+  try { const p = sessionStorage.getItem('lti_uuid_prefix'); if (p) { window._uuidPrefix = p; return p; } } catch(e) {}
   return '';
+}
+
+async function fetchAndCachePrefix() {
+  // Already set from hash — nothing to do
+  if (window._uuidPrefix) { console.log('[App] UUID prefix (cached):', window._uuidPrefix); return; }
+  // Fallback: ask server
+  try {
+    const r = await apiFetch('/api/me');
+    if (r.ok && r.data?.uuidPrefix) {
+      window._uuidPrefix = r.data.uuidPrefix;
+      console.log('[App] UUID prefix from /api/me:', window._uuidPrefix);
+    } else {
+      console.warn('[App] No uuidPrefix from server or hash');
+    }
+  } catch(e) { console.warn('[App] fetchAndCachePrefix error:', e); }
 }
 
 // Strip any prefix from a UUID — handles both prefixed and bare UUIDs
@@ -38,32 +44,41 @@ function stripUuidPrefix(value) {
 }
 
 
-// ── LTI auth token — reads from hash, window.name, or sessionStorage ────────────
-function getLtiToken() {
-  // 1. Check URL hash (set by launch page, most reliable in iframes)
+// ── Parse launch hash once and cache everything ──────────────────────────────
+(function() {
   try {
     const hash = window.location.hash;
-    if (hash && hash.startsWith('#t=')) {
-      const token = decodeURIComponent(hash.slice(3));
-      if (token) {
-        // Promote to sessionStorage and clear hash
-        try { sessionStorage.setItem('lti_token', token); } catch(e) {}
-        history.replaceState(null, '', window.location.pathname);
-        return token;
-      }
+    if (!hash || hash.length < 3) return;
+    // Parse #t=<token>&p=<prefix>
+    const params = {};
+    hash.slice(1).split('&').forEach(part => {
+      const eq = part.indexOf('=');
+      if (eq > 0) params[part.slice(0, eq)] = decodeURIComponent(part.slice(eq + 1));
+    });
+    if (params.t) {
+      try { sessionStorage.setItem('lti_token', params.t); } catch(e) {}
+      window._ltiToken = params.t;
     }
-  } catch(e) {}
-  // 2. Check sessionStorage
-  try {
-    const t = sessionStorage.getItem('lti_token');
-    if (t) return t;
-  } catch(e) {}
-  // 3. Check window.name
-  try {
-    if (window.name && window.name.startsWith('lti_token:')) {
-      return window.name.slice('lti_token:'.length);
+    if (params.p) {
+      try { sessionStorage.setItem('lti_uuid_prefix', params.p); } catch(e) {}
+      window._uuidPrefix = params.p;
+      console.log('[App] UUID prefix from hash:', params.p);
     }
-  } catch(e) {}
+    // Also try window.name
+    try {
+      const wn = JSON.parse(window.name || '{}');
+      if (wn.token && !window._ltiToken) { window._ltiToken = wn.token; try { sessionStorage.setItem('lti_token', wn.token); } catch(e) {} }
+      if (wn.prefix && !window._uuidPrefix) { window._uuidPrefix = wn.prefix; }
+    } catch(e) {}
+    // Clear hash from URL
+    history.replaceState(null, '', window.location.pathname);
+  } catch(e) { console.warn('[App] hash parse error:', e); }
+})();
+
+// ── LTI auth token ────────────────────────────────────────────────────────────
+function getLtiToken() {
+  if (window._ltiToken) return window._ltiToken;
+  try { const t = sessionStorage.getItem('lti_token'); if (t) { window._ltiToken = t; return t; } } catch(e) {}
   return '';
 }
 
@@ -77,7 +92,7 @@ let aborted   = false;
 const el = id => document.getElementById(id);
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   // Tab switching
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -139,9 +154,8 @@ document.addEventListener('DOMContentLoaded', () => {
     el('segCount').textContent = '';
   });
 
-  // Warm UUID prefix cache immediately
-  window._uuidPrefix = getUuidPrefix();
-  console.log('[App] UUID prefix:', window._uuidPrefix || '(none yet)');
+  // Fetch UUID prefix from server (reliable regardless of sessionStorage/cookie state)
+  await fetchAndCachePrefix();
 
   setDot('ok');
 });
