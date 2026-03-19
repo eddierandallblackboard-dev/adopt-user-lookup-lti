@@ -134,6 +134,18 @@ async function apiFetch(path, opts = {}) {
   return { ok: r.ok, status: r.status, data: r.ok ? await r.json() : null };
 }
 
+// ── Fetch BB site ID automatically ───────────────────────────────────────────
+async function fetchBbSiteId() {
+  try {
+    const r = await apiFetch('/api/bb/siteinfo');
+    if (r.ok) {
+      console.log('[App] BB siteinfo:', JSON.stringify(r.data));
+      // Log to status so user can see it in the UI
+      setAdoptStatus(`BB siteinfo fetched — check console for field names`, 'ok');
+    }
+  } catch(e) { console.warn('[App] fetchBbSiteId error:', e); }
+}
+
 // ── Single UUID lookup ────────────────────────────────────────────────────────
 async function lookupSingleUuid() {
   const raw  = el('uuidInput').value.trim();
@@ -257,6 +269,7 @@ async function finishRun() {
     if (!el('adoptSegmentName').value.trim()) {
       el('adoptSegmentName').value = `BB Segment – ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`;
     }
+    fetchBbSiteId();
     if (!el('adoptKey').value.trim()) {
       const key = await promptForIntegrationKey();
       if (key) loadSegmentsForPanel1();

@@ -127,22 +127,29 @@ router.get('/bb/user/uuid/:uuid', async (req, res) => {
   }
 });
 
-// GET /api/bb/siteinfo — returns the BB site ID used as Pendo visitor ID prefix
+// GET /api/bb/siteinfo — tries multiple endpoints to find BB site/system ID
 router.get('/bb/siteinfo', async (req, res) => {
   try {
     const token = await getBbToken(req);
     const { url } = bbConfig(req);
-    const r = await fetch(`${url}/learn/api/public/v1/system/properties`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!r.ok) {
-      const body = await r.text();
-      console.error(`[BB] system/properties failed ${r.status}: ${body.slice(0,200)}`);
-      return res.status(r.status).json({ error: `BB returned ${r.status}` });
+    const endpoints = [
+      '/learn/api/public/v1/system/version',
+      '/learn/api/public/v1/system/properties',
+      '/learn/api/public/v1/system/settings/cloud',
+      '/learn/api/public/v1/system/settings',
+    ];
+    const results = {};
+    for (const ep of endpoints) {
+      try {
+        const r = await fetch(`${url}${ep}`, { headers: { Authorization: `Bearer ${token}` } });
+        const body = await r.text();
+        results[ep] = { status: r.status, body: body.slice(0, 500) };
+        console.log(`[BB] ${ep} → ${r.status}: ${body.slice(0, 200)}`);
+      } catch(e) {
+        results[ep] = { error: e.message };
+      }
     }
-    const data = await r.json();
-    console.log('[BB] system/properties:', JSON.stringify(data));
-    res.json(data);
+    res.json(results);
   } catch (err) {
     console.error('[BB] siteinfo error:', err.message);
     res.status(500).json({ error: err.message });
