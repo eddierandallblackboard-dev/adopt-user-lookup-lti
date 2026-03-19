@@ -134,16 +134,20 @@ async function apiFetch(path, opts = {}) {
   return { ok: r.ok, status: r.status, data: r.ok ? await r.json() : null };
 }
 
-// ── Fetch BB site ID automatically ───────────────────────────────────────────
-async function fetchBbSiteId() {
+// ── Auto-discover BB Site ID from Pendo visitor IDs ─────────────────────────
+async function autoDiscoverSiteId(key) {
+  if (!key) return;
+  if (el('adoptSiteId').value.trim()) return; // already set
   try {
-    const r = await apiFetch('/api/bb/siteinfo');
-    if (r.ok) {
-      console.log('[App] BB siteinfo:', JSON.stringify(r.data));
-      // Log to status so user can see it in the UI
-      setAdoptStatus(`BB siteinfo fetched — check console for field names`, 'ok');
+    const r = await apiFetch(`/api/adopt/prefix?key=${encodeURIComponent(key)}`);
+    if (r.ok && r.data?.prefix) {
+      // prefix includes trailing underscore — strip it for display
+      const siteId = r.data.prefix.replace(/_$/, '');
+      el('adoptSiteId').value = siteId;
+      saveAdoptSettings();
+      console.log('[App] Auto-discovered site ID:', siteId);
     }
-  } catch(e) { console.warn('[App] fetchBbSiteId error:', e); }
+  } catch(e) { console.warn('[App] autoDiscoverSiteId error:', e); }
 }
 
 // ── Single UUID lookup ────────────────────────────────────────────────────────
@@ -269,11 +273,11 @@ async function finishRun() {
     if (!el('adoptSegmentName').value.trim()) {
       el('adoptSegmentName').value = `BB Segment – ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`;
     }
-    fetchBbSiteId();
     if (!el('adoptKey').value.trim()) {
       const key = await promptForIntegrationKey();
-      if (key) loadSegmentsForPanel1();
+      if (key) { autoDiscoverSiteId(key); loadSegmentsForPanel1(); }
     } else {
+      autoDiscoverSiteId(el('adoptKey').value.trim());
       loadSegmentsForPanel1();
     }
   }
@@ -446,6 +450,7 @@ async function updateAdoptSegment() {
 async function loadSegmentsForPanel1() {
   const key = el('adoptKey').value.trim();
   if (!key) { setAdoptStatus('Integration key is required to load segments.','err'); return; }
+  autoDiscoverSiteId(key);
 
   const sel = el('adoptSegmentSelect');
   sel.innerHTML = '<option value="">— loading… —</option>';
@@ -509,6 +514,7 @@ async function loadSegments() {
   const key = el('adoptKey2').value.trim();
   saveAdoptSettings();
   if (!key) { setAdoptStatus2('Integration key required.','err'); return; }
+  autoDiscoverSiteId(key);
 
   el('loadSegmentsBtn').disabled=true; el('loadSegmentsBtn').textContent='Loading…';
   setAdoptStatus2('Fetching segments…','');
