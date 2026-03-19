@@ -10,18 +10,30 @@ function getUuidPrefix() {
 }
 
 async function fetchAndCachePrefix() {
-  // Already set from hash — nothing to do
+  // Already set from hash or previous call — nothing to do
   if (window._uuidPrefix) { console.log('[App] UUID prefix (cached):', window._uuidPrefix); return; }
-  // Fallback: ask server
+  // Fallback: ask server via /api/me
   try {
     const r = await apiFetch('/api/me');
     if (r.ok && r.data?.uuidPrefix) {
       window._uuidPrefix = r.data.uuidPrefix;
       console.log('[App] UUID prefix from /api/me:', window._uuidPrefix);
-    } else {
-      console.warn('[App] No uuidPrefix from server or hash');
     }
-  } catch(e) { console.warn('[App] fetchAndCachePrefix error:', e); }
+  } catch(e) {}
+}
+
+// Discover prefix from Pendo by sampling an existing segment's visitor IDs
+async function discoverPrefixFromPendo(key) {
+  if (window._uuidPrefix) return window._uuidPrefix;
+  try {
+    const r = await apiFetch(`/api/adopt/prefix?key=${encodeURIComponent(key)}`);
+    if (r.ok && r.data?.prefix) {
+      window._uuidPrefix = r.data.prefix;
+      console.log('[App] UUID prefix discovered from Pendo:', window._uuidPrefix);
+      return window._uuidPrefix;
+    }
+  } catch(e) { console.warn('[App] discoverPrefixFromPendo error:', e); }
+  return '';
 }
 
 // Strip any prefix from a UUID — handles both prefixed and bare UUIDs
@@ -387,6 +399,11 @@ async function pushToAdopt() {
   if (!key)   { setAdoptStatus('Integration key is required.','err'); return; }
   if (!name)  { setAdoptStatus('Segment name is required.','err'); return; }
   if (!uuids.length) { setAdoptStatus('No UUIDs to push.','err'); return; }
+  // Ensure prefix is known before pushing
+  if (!window._uuidPrefix) {
+    setAdoptStatus('Discovering visitor ID prefix…','');
+    await discoverPrefixFromPendo(key);
+  }
 
   // Duplicate check
   const existing = (window._adoptSegments||[]).filter(s=>(s.name||'').toLowerCase()===name.toLowerCase());
@@ -475,6 +492,8 @@ async function updateAdoptSegment() {
 async function loadSegmentsForPanel1() {
   const key = el('adoptKey').value.trim();
   if (!key) { setAdoptStatus('Integration key is required to load segments.','err'); return; }
+  // Discover Pendo visitor ID prefix if not already known
+  if (!window._uuidPrefix) await discoverPrefixFromPendo(key);
 
   const sel = el('adoptSegmentSelect');
   sel.innerHTML='<option value="">— loading… —</option>';
