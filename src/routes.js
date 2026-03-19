@@ -174,41 +174,43 @@ router.get('/adopt/segments', async (req, res) => {
 });
 
 // GET /api/adopt/prefix?key=xxx
-// Discovers the visitor ID prefix by sampling any segment's members
+// Discovers the BB site ID prefix by sampling any visitor from Pendo
 router.get('/adopt/prefix', async (req, res) => {
   const { key } = req.query;
-  console.log('[Adopt] /prefix called, key present:', !!key);
+  console.log('[Adopt] /prefix called');
   if (!key) return res.status(400).json({ error: 'key required' });
   const adoptHost = getAdoptHost(req);
   try {
-    // Get any segment to sample a visitor ID from
-    const segR = await fetch(`${adoptHost}/api/v1/segment?createdByApi=false`, { headers: adoptHeaders(key) });
-    if (!segR.ok) return res.status(segR.status).json({ error: `Pendo returned ${segR.status}` });
-    const segments = await segR.json();
-    const list = Array.isArray(segments) ? segments : (segments.results || []);
-    
-    // Try each segment until we find one with members
-    for (const seg of list.slice(0, 5)) {
-      const memR = await fetch(`${adoptHost}/api/v1/aggregation`, {
-        method: 'POST', headers: adoptHeaders(key),
-        body: JSON.stringify({ response: { mimeType: 'application/json' }, request: { pipeline: [
+    // Sample a single visitor directly — fastest way to get a visitor ID
+    const r = await fetch(`${adoptHost}/api/v1/aggregation`, {
+      method: 'POST', headers: adoptHeaders(key),
+      body: JSON.stringify({
+        response: { mimeType: 'application/json' },
+        request: { pipeline: [
           { source: { visitors: null } },
-          { segment: { id: seg.id } },
-          { select: { visitorId: 'visitorId' } },
-          { limit: { limit: 1 } }
-        ]}})
-      });
-      if (!memR.ok) continue;
-      const memData = await memR.json();
-      const results = memData.results || [];
-      if (results.length > 0 && results[0].visitorId) {
-        const visitorId = results[0].visitorId;
-        const lastUnderscore = visitorId.lastIndexOf('_');
-        const prefix = lastUnderscore > 0 ? visitorId.slice(0, lastUnderscore + 1) : '';
+          { select: { visitorId: 'visitorId' } }
+        ]}
+      })
+    });
+    if (!r.ok) {
+      const body = await r.text();
+      console.error(`[Adopt] prefix aggregation failed ${r.status}: ${body.slice(0,200)}`);
+      return res.status(r.status).json({ error: `Pendo returned ${r.status}` });
+    }
+    const data = await r.json();
+    console.log(`[Adopt] prefix aggregation returned ${(data.results||[]).length} visitors`);
+    const results = data.results || [];
+    // Find first visitor ID that contains an underscore (has a prefix)
+    for (const row of results) {
+      const visitorId = row.visitorId || '';
+      const lastUnderscore = visitorId.lastIndexOf('_');
+      if (lastUnderscore > 0) {
+        const prefix = visitorId.slice(0, lastUnderscore + 1);
         console.log(`[Adopt] Discovered prefix: '${prefix}' from visitorId: ${visitorId}`);
         return res.json({ prefix, visitorId });
       }
     }
+    console.log('[Adopt] No prefixed visitor IDs found');
     res.json({ prefix: '' });
   } catch (err) {
     console.error('[Adopt] prefix discovery error:', err.message);
