@@ -1,121 +1,53 @@
 // app.js — Adopt User Lookup LTI frontend
 'use strict';
 
-// ── UUID prefix — reads from Site ID input field ─────────────────────────────
-function getUuidPrefix() {
-  // Read from input field first (most authoritative)
-  const siteIdEl = document.getElementById('adoptSiteId');
-  const siteId = siteIdEl ? siteIdEl.value.trim() : '';
-  if (siteId) {
-    // Ensure it ends with underscore
-    const prefix = siteId.endsWith('_') ? siteId : siteId + '_';
-    window._uuidPrefix = prefix;
-    return prefix;
-  }
-  return window._uuidPrefix || '';
-}
-
-async function fetchAndCachePrefix() {
-  // Already set from hash or previous call — nothing to do
-  if (window._uuidPrefix) { console.log('[App] UUID prefix (cached):', window._uuidPrefix); return; }
-  // Fallback: ask server via /api/me
+// ── Token storage ─────────────────────────────────────────────────────────────
+// The launch page stores the token in sessionStorage. We read it here.
+// In iframe contexts sessionStorage may be blocked — we also accept it via
+// a POST to a hidden form that sets a cookie... but simplest: just read it.
+function getLtiToken() {
+  if (window._ltiToken) return window._ltiToken;
   try {
-    const r = await apiFetch('/api/me');
-    if (r.ok && r.data?.uuidPrefix) {
-      window._uuidPrefix = r.data.uuidPrefix;
-      console.log('[App] UUID prefix from /api/me:', window._uuidPrefix);
-    }
+    const t = sessionStorage.getItem('lti_token');
+    if (t) { window._ltiToken = t; return t; }
   } catch(e) {}
+  return '';
 }
 
-// Discover prefix from Pendo by sampling an existing segment's visitor IDs
-async function discoverPrefixFromPendo(key) {
-  console.log('[App] discoverPrefixFromPendo called, key length:', key?.length, 'current prefix:', window._uuidPrefix);
-  if (!key) return window._uuidPrefix || '';
-  try {
-    const r = await apiFetch(`/api/adopt/prefix?key=${encodeURIComponent(key)}`);
-    console.log('[App] /api/adopt/prefix response:', r.ok, r.status, r.data);
-    if (r.ok && r.data?.prefix) {
-      window._uuidPrefix = r.data.prefix;
-      console.log('[App] UUID prefix discovered:', window._uuidPrefix);
-      return window._uuidPrefix;
-    }
-    if (r.ok && r.data?.prefix === '') {
-      console.warn('[App] Prefix discovery returned empty — no segments with members found');
-    }
-  } catch(e) { console.warn('[App] discoverPrefixFromPendo error:', e); }
-  return window._uuidPrefix || '';
+// ── UUID helpers ──────────────────────────────────────────────────────────────
+function getUuidPrefix() {
+  const siteIdEl = document.getElementById('adoptSiteId');
+  const raw = (siteIdEl ? siteIdEl.value.trim() : '') || (window._uuidPrefix || '');
+  if (!raw) return '';
+  return raw.endsWith('_') ? raw : raw + '_';
 }
 
-// Strip any prefix from a UUID — handles both prefixed and bare UUIDs
-// A BB UUID looks like: <siteUUID>_<userUUID>
-// We detect a prefix by checking if removing everything up to the last underscore
-// leaves something that looks like a UUID (8-4-4-4-12 hex pattern).
 function stripUuidPrefix(value) {
   if (!value) return value;
-  const lastUnderscore = value.lastIndexOf('_');
-  if (lastUnderscore > 0) {
-    const candidate = value.slice(lastUnderscore + 1);
-    // Check if it looks like a UUID
-    // Matches both dashed UUID (8-4-4-4-12) and compact 32-char hex (no dashes)
+  const i = value.lastIndexOf('_');
+  if (i > 0) {
+    const candidate = value.slice(i + 1);
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate) ||
-        /^[0-9a-f]{32}$/i.test(candidate)) {
-      return candidate;
-    }
+        /^[0-9a-f]{32}$/i.test(candidate)) return candidate;
   }
   return value;
 }
 
-
-// ── Parse launch hash once and cache everything ──────────────────────────────
-(function() {
-  try {
-    const hash = window.location.hash;
-    if (!hash || hash.length < 3) return;
-    // Parse #t=<token>&p=<prefix>
-    const params = {};
-    hash.slice(1).split('&').forEach(part => {
-      const eq = part.indexOf('=');
-      if (eq > 0) params[part.slice(0, eq)] = decodeURIComponent(part.slice(eq + 1));
-    });
-    if (params.t) {
-      try { sessionStorage.setItem('lti_token', params.t); } catch(e) {}
-      window._ltiToken = params.t;
-    }
-    if (params.p) {
-      try { sessionStorage.setItem('lti_uuid_prefix', params.p); } catch(e) {}
-      window._uuidPrefix = params.p;
-      console.log('[App] UUID prefix from hash:', params.p);
-    }
-    // Also try window.name
-    try {
-      const wn = JSON.parse(window.name || '{}');
-      if (wn.token && !window._ltiToken) { window._ltiToken = wn.token; try { sessionStorage.setItem('lti_token', wn.token); } catch(e) {} }
-      if (wn.prefix && !window._uuidPrefix) { window._uuidPrefix = wn.prefix; }
-    } catch(e) {}
-    // Clear hash from URL
-    history.replaceState(null, '', window.location.pathname);
-  } catch(e) { console.warn('[App] hash parse error:', e); }
-})();
-
-// ── LTI auth token ────────────────────────────────────────────────────────────
-function getLtiToken() {
-  if (window._ltiToken) return window._ltiToken;
-  try { const t = sessionStorage.getItem('lti_token'); if (t) { window._ltiToken = t; return t; } } catch(e) {}
-  return '';
+function applyPrefix(bareUuid) {
+  const p = getUuidPrefix();
+  return p ? p + stripUuidPrefix(bareUuid) : bareUuid;
 }
 
-
 // ── State ─────────────────────────────────────────────────────────────────────
-let csvData   = null;  // { headers, rows, emailCol }
-let results   = [];
-let running   = false;
-let aborted   = false;
+let csvData = null;
+let results = [];
+let running = false;
+let aborted = false;
 
 const el = id => document.getElementById(id);
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   // Tab switching
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -177,18 +109,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('segCount').textContent = '';
   });
 
-  // Restore site ID from localStorage (not sensitive, safe to persist)
-  const savedSiteId = localStorage.getItem('adoptSiteId') || '';
-  if (savedSiteId) el('adoptSiteId').value = savedSiteId;
-  // Save site ID when changed
-  el('adoptSiteId').addEventListener('input', () => {
-    localStorage.setItem('adoptSiteId', el('adoptSiteId').value.trim());
-  });
+  // Restore saved settings
+  const saved = JSON.parse(localStorage.getItem('adoptSettings') || '{}');
+  if (saved.host)   { el('adoptHost').value = saved.host; el('adoptHost2').value = saved.host; }
+  if (saved.siteId) { el('adoptSiteId').value = saved.siteId; }
+
+  // Save site ID on change
+  el('adoptSiteId').addEventListener('input', saveAdoptSettings);
 
   setDot('ok');
 });
 
-// ── API helpers ───────────────────────────────────────────────────────────────
+// ── API fetch ─────────────────────────────────────────────────────────────────
 async function apiFetch(path, opts = {}) {
   const token = getLtiToken();
   const r = await fetch(path, {
@@ -196,7 +128,7 @@ async function apiFetch(path, opts = {}) {
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
-      ...(opts.headers||{})
+      ...(opts.headers || {})
     }
   });
   return { ok: r.ok, status: r.status, data: r.ok ? await r.json() : null };
@@ -205,26 +137,22 @@ async function apiFetch(path, opts = {}) {
 // ── Single UUID lookup ────────────────────────────────────────────────────────
 async function lookupSingleUuid() {
   const raw  = el('uuidInput').value.trim();
-  // Strip prefix: if the value contains an underscore followed by a UUID-shaped segment,
-  // take only the part after the last underscore. Works whether or not LTI token is present.
   const uuid = stripUuidPrefix(raw);
   const out  = el('uuidResult');
-
   if (!uuid) { out.innerHTML = '<span style="color:#dc2626">⚠ Paste a UUID to look up.</span>'; return; }
   out.innerHTML = '<span style="color:#6b7280">Looking up…</span>';
   el('uuidLookupBtn').disabled = true;
-
   try {
     const r = await apiFetch(`/api/bb/user/uuid/${encodeURIComponent(uuid)}`);
     if (r.ok && r.data?.userName) {
       const u = r.data;
       const fullName = [u.name?.given, u.name?.family].filter(Boolean).join(' ');
-      const email    = u.contact?.email || '';
+      const email = u.contact?.email || '';
       out.innerHTML = `
         <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:8px 10px;background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:7px">
           <span style="font-weight:700;color:#15803d">${u.userName}</span>
           ${fullName ? `<span style="color:#374151">${fullName}</span>` : ''}
-          ${email    ? `<span style="color:#6b7280;font-size:12px">${email}</span>` : ''}
+          ${email ? `<span style="color:#6b7280;font-size:12px">${email}</span>` : ''}
           <span style="font-family:'Courier New',monospace;font-size:11px;color:#9ca3af">${uuid}</span>
         </div>`;
     } else if (r.status === 404) {
@@ -270,46 +198,43 @@ function renderFileLoaded() {
   el('dropzone').classList.add('loaded');
   el('dropInner').innerHTML = `<div class="drop-icon">✓</div><div class="drop-text">${csvData.rows.length} rows loaded</div>`;
   el('runBtn').disabled = false;
-
   const sel = el('colSelector');
   sel.innerHTML = csvData.headers.map(h => `<option${h===csvData.emailCol?' selected':''}>${h}</option>`).join('');
-  sel.onchange  = () => { csvData.emailCol = sel.value; };
+  sel.onchange = () => { csvData.emailCol = sel.value; };
   el('colSelectorWrap').style.visibility = 'visible';
 }
 
-// ── Email → UUID lookup (batch) ───────────────────────────────────────────────
+// ── Email → UUID lookup ───────────────────────────────────────────────────────
 async function lookupEmail(email) {
   const clean = email.replace(/,+$/,'').trim();
   const r = await apiFetch(`/api/bb/user?email=${encodeURIComponent(clean)}`);
-  if (!r.ok) return { email: clean, uuid:'', status: r.status===403?'forbidden':'network_error' };
-
+  if (!r.ok) return { email: clean, uuid: '', status: r.status===403?'forbidden':'network_error' };
   const users = r.data?.users || [];
-  if (users.length === 1) return { email:clean, uuid: getUuidPrefix() + users[0].uuid, status:'found' };
-  if (users.length > 1)  {
+  if (users.length === 1) return { email: clean, uuid: users[0].uuid, status: 'found' };
+  if (users.length > 1) {
     const chosen = await showUserPicker(clean, users);
-    if (chosen) return { email:clean, uuid: getUuidPrefix() + chosen.uuid, status:'found' };
-    return { email:clean, uuid:'', status:'skipped' };
+    if (chosen) return { email: clean, uuid: chosen.uuid, status: 'found' };
+    return { email: clean, uuid: '', status: 'skipped' };
   }
-  return { email:clean, uuid:'', status:'not_found' };
+  return { email: clean, uuid: '', status: 'not_found' };
 }
 
 async function runLookup() {
   if (!csvData) { showError('Upload a CSV file first.'); return; }
-
   results=[]; aborted=false; running=true;
   setDot('running');
   el('resultsPanel').classList.remove('hidden');
-  el('runBtn').style.display  = 'none';
+  el('runBtn').style.display = 'none';
   el('stopBtn').style.display = 'inline-block';
-  el('resetBtn').disabled     = true;
-  el('feedBody').innerHTML    = '';
+  el('resetBtn').disabled = true;
+  el('feedBody').innerHTML = '';
   el('feedPanel').style.display = 'block';
   el('tablePanel').classList.add('hidden');
 
   const emails = csvData.rows.map(r => r[csvData.emailCol]).filter(Boolean);
   for (let i=0; i<emails.length && !aborted; i++) {
     const res = await lookupEmail(emails[i]);
-    results.push({ ...csvData.rows[i], _email:res.email, _uuid:res.uuid, _status:res.status });
+    results.push({ ...csvData.rows[i], _email: res.email, _uuid: res.uuid, _status: res.status });
     addFeedRow(results[results.length-1]);
     updateProgress(i+1, emails.length, false);
     updateStats();
@@ -318,15 +243,15 @@ async function runLookup() {
 }
 
 async function finishRun() {
-  running=false;
+  running = false;
   setDot('done');
-  el('runBtn').style.display  = 'inline-block';
+  el('runBtn').style.display = 'inline-block';
   el('stopBtn').style.display = 'none';
-  el('resetBtn').disabled     = false;
+  el('resetBtn').disabled = false;
   updateProgress(results.length, results.length, true);
   el('progressTitle').textContent = `Complete — ${results.length} processed`;
   const foundCount = results.filter(r=>r._status==='found').length;
-  if (foundCount>0) {
+  if (foundCount > 0) {
     el('dlBtn').classList.remove('hidden');
     el('adoptPanel').style.display = 'block';
     if (!el('adoptSegmentName').value.trim()) {
@@ -361,7 +286,7 @@ function updateStats() {
 
 function addFeedRow(r) {
   const feed = el('feedBody');
-  const row  = document.createElement('div');
+  const row = document.createElement('div');
   row.className = 'feed-row';
   row.innerHTML = `
     <span class="feed-email">${r._email}</span>
@@ -370,7 +295,7 @@ function addFeedRow(r) {
 }
 
 function renderTable() {
-  const statusBadge = s => {
+  const badge = s => {
     const cls = {'found':'found','not_found':'not_found','forbidden':'forbidden','skipped':'skipped'}[s] ? `badge-${s}` : 'badge-error';
     const lbl = {'found':'found','not_found':'not found','forbidden':'forbidden','skipped':'skipped','network_error':'net error'}[s] || s;
     return `<span class="badge ${cls}">${lbl}</span>`;
@@ -379,16 +304,16 @@ function renderTable() {
     <tr>
       <td style="color:#374151">${r._email}</td>
       <td>${r._uuid ? `<span class="uuid-pill">${r._uuid}</span>` : '—'}</td>
-      <td>${statusBadge(r._status)}</td>
+      <td>${badge(r._status)}</td>
     </tr>`).join('');
 }
 
 function exportCSV() {
-  const uuids = results.filter(r=>r._uuid).map(r=>r._uuid);
-  const blob  = new Blob([uuids.join('\n')], {type:'text/csv'});
-  const a     = document.createElement('a');
-  a.href      = URL.createObjectURL(blob);
-  a.download  = 'uuids.csv';
+  const uuids = results.filter(r=>r._uuid).map(r => applyPrefix(r._uuid));
+  const blob = new Blob([uuids.join('\n')], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'uuids.csv';
   a.click();
 }
 
@@ -410,33 +335,27 @@ function resetAll() {
 async function pushToAdopt() {
   const key  = el('adoptKey').value.trim();
   const name = el('adoptSegmentName').value.trim();
-  // Apply prefix at push time — UUIDs in results may be bare if prefix wasn't known during lookup
   const prefix = getUuidPrefix();
-  const uuids = results.filter(r=>r._uuid).map(r => {
-    const bare = stripUuidPrefix(r._uuid);
-    return prefix ? prefix + bare : bare;
-  });
-  console.log('[App] Push UUIDs sample:', uuids[0], '| prefix:', prefix);
+  const uuids = results.filter(r=>r._uuid).map(r => applyPrefix(r._uuid));
 
   if (!key)   { setAdoptStatus('Integration key is required.','err'); return; }
   if (!name)  { setAdoptStatus('Segment name is required.','err'); return; }
   if (!uuids.length) { setAdoptStatus('No UUIDs to push.','err'); return; }
-  // Get prefix from Site ID field
-  const prefix = getUuidPrefix();
   if (!prefix) { setAdoptStatus('⚠ Enter your Pendo Site ID above before pushing.','err'); return; }
-  console.log('[App] Prefix for push:', prefix);
+
+  console.log('[App] Pushing', uuids.length, 'visitors, sample:', uuids[0]);
 
   // Duplicate check
   const existing = (window._adoptSegments||[]).filter(s=>(s.name||'').toLowerCase()===name.toLowerCase());
-  if (existing.length>0) {
+  if (existing.length > 0) {
     const res = await showDuplicateSegmentPrompt(name, existing[0], uuids.length);
     if (!res) return;
     if (res==='update') {
       el('adoptModeUpdate').checked=true; el('adoptModeCreate').checked=false;
       el('adoptCreateRow').style.display='none'; el('adoptUpdateRow').style.display='flex';
       await loadSegmentsForPanel1();
-      const sel=el('adoptSegmentSelect');
-      for(const opt of sel.options) if(opt.value===existing[0].id){opt.selected=true;break;}
+      const sel = el('adoptSegmentSelect');
+      for (const opt of sel.options) if (opt.value===existing[0].id) { opt.selected=true; break; }
       setAdoptStatus('Switched to update mode — click "Update Segment" to proceed.','ok'); return;
     }
   }
@@ -446,14 +365,14 @@ async function pushToAdopt() {
 
   saveAdoptSettings();
   el('adoptPushBtn').disabled=true;
-  setAdoptStatus(`Creating segment…`,'');
+  setAdoptStatus('Creating segment…','');
 
   try {
-    const r = await apiFetch('/api/adopt/segments/create',{
-      method:'POST',
-      body:JSON.stringify({key, name, visitors:uuids, adoptHost:el('adoptHost').value.trim()||'https://app.pendo.io'})
+    const r = await apiFetch('/api/adopt/segments/create', {
+      method: 'POST',
+      body: JSON.stringify({key, name, visitors: uuids})
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) { setAdoptStatus(`✗ ${r.data?.error || 'Failed'}`, 'err'); return; }
     const { statusUrl } = r.data;
     setAdoptStatus('✓ Segment created — processing…','ok');
     if (statusUrl) pollAdoptStatus(statusUrl, key, setAdoptStatus);
@@ -466,18 +385,16 @@ async function pushToAdopt() {
 
 // ── Adopt: update (append) ────────────────────────────────────────────────────
 async function updateAdoptSegment() {
-  const key      = el('adoptKey').value.trim();
-  const segId    = el('adoptSegmentSelect').value;
-  const segName  = el('adoptSegmentSelect').options[el('adoptSegmentSelect').selectedIndex]?.text||'';
-  const prefix = getUuidPrefix();
-  const newUuids = results.filter(r=>r._uuid).map(r => {
-    const bare = stripUuidPrefix(r._uuid);
-    return prefix ? prefix + bare : bare;
-  });
+  const key     = el('adoptKey').value.trim();
+  const segId   = el('adoptSegmentSelect').value;
+  const segName = el('adoptSegmentSelect').options[el('adoptSegmentSelect').selectedIndex]?.text||'';
+  const prefix  = getUuidPrefix();
+  const newUuids = results.filter(r=>r._uuid).map(r => applyPrefix(r._uuid));
 
   if (!key)    { setAdoptStatus('Integration key is required.','err'); return; }
   if (!segId)  { setAdoptStatus('Select a segment to update.','err'); return; }
   if (!newUuids.length) { setAdoptStatus('No UUIDs to push.','err'); return; }
+  if (!prefix) { setAdoptStatus('⚠ Enter your Pendo Site ID above before pushing.','err'); return; }
 
   const confirmed = await showConfirm(
     `Append ${newUuids.length} visitor${newUuids.length!==1?'s':''} to segment "${segName}"?`,
@@ -489,21 +406,20 @@ async function updateAdoptSegment() {
   setAdoptStatus('Fetching existing members to merge…','');
 
   try {
-    // Get existing members
-    const mem = await apiFetch('/api/adopt/segments/members',{
-      method:'POST',
-      body:JSON.stringify({key,segmentId:segId,adoptHost:el('adoptHost').value.trim()||'https://app.pendo.io'})
+    const mem = await apiFetch('/api/adopt/segments/members', {
+      method: 'POST',
+      body: JSON.stringify({key, segmentId: segId})
     });
     const existing = mem.ok ? (mem.data?.results||[]).map(r=>r.visitorId).filter(Boolean) : [];
-    const merged   = [...new Set([...existing,...newUuids])];
+    const merged   = [...new Set([...existing, ...newUuids])];
     const added    = merged.length - existing.length;
 
     setAdoptStatus(`Merging ${existing.length} existing + ${added} new…`,'');
-    const r = await apiFetch(`/api/adopt/segments/${segId}`,{
-      method:'PUT',
-      body:JSON.stringify({key,visitors:merged,adoptHost:el('adoptHost').value.trim()||'https://app.pendo.io'})
+    const r = await apiFetch(`/api/adopt/segments/${segId}`, {
+      method: 'PUT',
+      body: JSON.stringify({key, visitors: merged})
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) throw new Error(r.data?.error || `HTTP ${r.status}`);
     setAdoptStatus(`✓ Appended ${added} visitor${added!==1?'s':''} — ${merged.length} total. Processing…`,'ok');
     if (r.data?.statusUrl) pollAdoptStatus(r.data.statusUrl, key, setAdoptStatus);
   } catch(err) {
@@ -513,35 +429,32 @@ async function updateAdoptSegment() {
   }
 }
 
-// ── Adopt: load segments (panel 1 — update mode) ──────────────────────────────
+// ── Adopt: load segments (panel 1) ────────────────────────────────────────────
 async function loadSegmentsForPanel1() {
   const key = el('adoptKey').value.trim();
   if (!key) { setAdoptStatus('Integration key is required to load segments.','err'); return; }
-  // Discover Pendo visitor ID prefix if not already known
-  if (!window._uuidPrefix) await discoverPrefixFromPendo(key);
 
   const sel = el('adoptSegmentSelect');
-  sel.innerHTML='<option value="">— loading… —</option>';
+  sel.innerHTML = '<option value="">— loading… —</option>';
   setAdoptStatus('Fetching segments…','');
 
   try {
-    const r = await apiFetch(`/api/adopt/segments?key=${encodeURIComponent(key)}&createdByApi=true&adoptHost=${encodeURIComponent(el('adoptHost').value.trim()||'https://app.pendo.io')}`);
+    const r = await apiFetch(`/api/adopt/segments?key=${encodeURIComponent(key)}&createdByApi=true`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const segments = (Array.isArray(r.data)?r.data:(r.data?.results||[])).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
     window._adoptSegments = segments;
     sel.innerHTML = segments.length
-      ? ['<option value="">— Select existing segment to update —</option>',...segments.map(s=>`<option value="${s.id}">${s.name}</option>`)].join('')
+      ? ['<option value="">— Select existing segment to update —</option>', ...segments.map(s=>`<option value="${s.id}">${s.name}</option>`)].join('')
       : '<option value="">— no API-created segments found —</option>';
-    // Show or hide the "Update existing segment" radio based on whether segments exist
     el('adoptModeLabelUpdate').style.display = segments.length ? 'flex' : 'none';
     if (!segments.length && el('adoptModeUpdate').checked) {
-      el('adoptModeCreate').checked = true;
-      el('adoptCreateRow').style.display = '';
-      el('adoptUpdateRow').style.display = 'none';
+      el('adoptModeCreate').checked=true;
+      el('adoptCreateRow').style.display='';
+      el('adoptUpdateRow').style.display='none';
     }
-    setAdoptStatus(segments.length?`✓ ${segments.length} segment(s) loaded`:'No API-created segments found.',segments.length?'ok':'');
+    setAdoptStatus(segments.length ? `✓ ${segments.length} segment(s) loaded` : 'No API-created segments found.', segments.length?'ok':'');
   } catch(err) {
-    sel.innerHTML='<option value="">— error loading segments —</option>';
+    sel.innerHTML = '<option value="">— error loading segments —</option>';
     setAdoptStatus(`✗ ${err.message}`,'err');
   }
 }
@@ -550,54 +463,53 @@ async function loadSegmentsForPanel1() {
 async function showSegmentMembers1() {
   const key    = el('adoptKey').value.trim();
   const segId  = el('adoptSegmentSelect').value;
-  const segName= el('adoptSegmentSelect').options[el('adoptSegmentSelect').selectedIndex]?.text||'';
+  const segName = el('adoptSegmentSelect').options[el('adoptSegmentSelect').selectedIndex]?.text||'';
   if (!segId||!key) return;
 
   el('adoptMembers1Title').textContent = segName;
   el('adoptMembers1Count').textContent = 'Loading…';
   el('adoptMembersPanel1').classList.remove('hidden');
   const tbody = el('adoptMembers1Body');
-  tbody.innerHTML='<tr><td colspan="3" style="color:#9ca3af;text-align:center;padding:8px">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="3" style="color:#9ca3af;text-align:center;padding:8px">Loading…</td></tr>';
 
   try {
-    const r = await apiFetch('/api/adopt/segments/members',{method:'POST',body:JSON.stringify({key,segmentId:segId})});
+    const r = await apiFetch('/api/adopt/segments/members', {method:'POST', body:JSON.stringify({key, segmentId:segId})});
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const rows = r.data?.results||[];
-    el('adoptMembers1Count').textContent=`${rows.length} member(s)`;
-    if (rows.length===0) {
-      tbody.innerHTML='<tr><td colspan="3" style="color:#9ca3af;text-align:center;padding:8px">This Segment Contains 0 Members</td></tr>';
+    el('adoptMembers1Count').textContent = `${rows.length} member(s)`;
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="3" style="color:#9ca3af;text-align:center;padding:8px">This Segment Contains 0 Members</td></tr>';
       return;
     }
-    const members = rows.map(r=>({visitorId:r.visitorId||'',bareUuid:stripUuidPrefix(r.visitorId||''),username:null}));
-    const render  = ()=>{tbody.innerHTML=members.map((m,i)=>`<tr><td style="color:#9ca3af;width:36px;font-size:11px">${i+1}</td><td><span class="uuid-pill">${m.bareUuid}</span></td><td style="color:#374151;font-size:13px">${m.username||'<span style="color:#d1d5db">—</span>'}</td></tr>`).join('');};
+    const members = rows.map(r=>({visitorId:r.visitorId||'', bareUuid:stripUuidPrefix(r.visitorId||''), username:null}));
+    const render = () => { tbody.innerHTML = members.map((m,i)=>`<tr><td style="color:#9ca3af;width:36px;font-size:11px">${i+1}</td><td><span class="uuid-pill">${m.bareUuid}</span></td><td style="color:#374151;font-size:13px">${m.username||'<span style="color:#d1d5db">—</span>'}</td></tr>`).join(''); };
     render();
     await enrichUsernames(members, render);
   } catch(err) {
-    tbody.innerHTML=`<tr><td colspan="3" style="color:#dc2626;text-align:center;padding:8px">✗ ${err.message}</td></tr>`;
-    el('adoptMembers1Count').textContent='';
+    tbody.innerHTML = `<tr><td colspan="3" style="color:#dc2626;text-align:center;padding:8px">✗ ${err.message}</td></tr>`;
+    el('adoptMembers1Count').textContent = '';
   }
 }
 
 // ── Adopt: load segments (tab 2) ──────────────────────────────────────────────
 async function loadSegments() {
-  const host = (el('adoptHost2').value.trim()||'https://app.pendo.io').replace(/\/$/,'');
-  const key  = el('adoptKey2').value.trim();
+  const key = el('adoptKey2').value.trim();
   saveAdoptSettings();
   if (!key) { setAdoptStatus2('Integration key required.','err'); return; }
 
   el('loadSegmentsBtn').disabled=true; el('loadSegmentsBtn').textContent='Loading…';
   setAdoptStatus2('Fetching segments…','');
   try {
-    const r = await apiFetch(`/api/adopt/segments?key=${encodeURIComponent(key)}&adoptHost=${encodeURIComponent(el('adoptHost2').value.trim()||'https://app.pendo.io')}`);
+    const r = await apiFetch(`/api/adopt/segments?key=${encodeURIComponent(key)}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const segments = Array.isArray(r.data)?r.data:(r.data?.results||[]);
     const sel = el('segmentSelect');
-    sel.innerHTML='<option value="">— choose a segment —</option>';
-    segments.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).forEach(s=>{
-      const opt=document.createElement('option'); opt.value=s.id; opt.textContent=s.name||s.id; sel.appendChild(opt);
+    sel.innerHTML = '<option value="">— choose a segment —</option>';
+    segments.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).forEach(s => {
+      const opt = document.createElement('option'); opt.value=s.id; opt.textContent=s.name||s.id; sel.appendChild(opt);
     });
-    el('segmentSelectorPanel').style.display='block';
-    el('showMembersBtn').disabled=true;
+    el('segmentSelectorPanel').style.display = 'block';
+    el('showMembersBtn').disabled = true;
     el('segmentMembersPanel').classList.add('hidden');
     setAdoptStatus2(`✓ ${segments.length} segment(s) loaded`,'ok');
   } catch(err) {
@@ -611,28 +523,28 @@ async function loadSegments() {
 async function showSegmentMembers() {
   const key    = el('adoptKey2').value.trim();
   const segId  = el('segmentSelect').value;
-  const segName= el('segmentSelect').options[el('segmentSelect').selectedIndex].text;
+  const segName = el('segmentSelect').options[el('segmentSelect').selectedIndex].text;
   if (!segId||!key) return;
 
   el('showMembersBtn').disabled=true; el('showMembersBtn').textContent='Loading…';
   setAdoptStatus2('Fetching members…','');
 
   try {
-    const r = await apiFetch('/api/adopt/segments/members',{method:'POST',body:JSON.stringify({key,segmentId:segId})});
+    const r = await apiFetch('/api/adopt/segments/members', {method:'POST', body:JSON.stringify({key, segmentId:segId})});
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const rows = r.data?.results||[];
-    el('segmentMembersTitle').textContent=`${segName} — ${rows.length} member(s)`;
-    const tbody=el('segmentMembersBody');
-    if (rows.length===0) {
-      tbody.innerHTML='<tr><td colspan="3" style="color:#9ca3af;text-align:center;padding:10px">This Segment Contains 0 Members</td></tr>';
-      el('segCount').textContent='';
+    el('segmentMembersTitle').textContent = `${segName} — ${rows.length} member(s)`;
+    const tbody = el('segmentMembersBody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="3" style="color:#9ca3af;text-align:center;padding:10px">This Segment Contains 0 Members</td></tr>';
+      el('segCount').textContent = '';
       el('segmentMembersPanel').classList.remove('hidden');
       setAdoptStatus2('',''); return;
     }
-    const members=rows.map(r=>({visitorId:r.visitorId||'',bareUuid:stripUuidPrefix(r.visitorId||''),username:null}));
-    const render=()=>{tbody.innerHTML=members.map((m,i)=>`<tr><td style="color:#9ca3af;width:36px;font-size:11px">${i+1}</td><td><span class="uuid-pill">${m.bareUuid}</span></td><td style="color:#374151;font-size:13px">${m.username||'<span style="color:#d1d5db">—</span>'}</td></tr>`).join('');};
+    const members = rows.map(r=>({visitorId:r.visitorId||'', bareUuid:stripUuidPrefix(r.visitorId||''), username:null}));
+    const render = () => { tbody.innerHTML = members.map((m,i)=>`<tr><td style="color:#9ca3af;width:36px;font-size:11px">${i+1}</td><td><span class="uuid-pill">${m.bareUuid}</span></td><td style="color:#374151;font-size:13px">${m.username||'<span style="color:#d1d5db">—</span>'}</td></tr>`).join(''); };
     render();
-    el('segCount').textContent=`${rows.length} visitor(s) in this segment`;
+    el('segCount').textContent = `${rows.length} visitor(s) in this segment`;
     el('segmentMembersPanel').classList.remove('hidden');
     setAdoptStatus2('','');
     await enrichUsernames(members, render, s=>setAdoptStatus2(s,''));
@@ -644,16 +556,16 @@ async function showSegmentMembers() {
   }
 }
 
-// ── Shared: enrich members with BB usernames ──────────────────────────────────
+// ── Enrich member UUIDs with BB usernames ─────────────────────────────────────
 async function enrichUsernames(members, renderFn, statusFn) {
-  for (let i=0;i<members.length;i++) {
-    const uuid=members[i].bareUuid;
+  for (let i=0; i<members.length; i++) {
+    const uuid = members[i].bareUuid;
     if (!uuid) continue;
     try {
       const r = await apiFetch(`/api/bb/user/uuid/${encodeURIComponent(uuid)}`);
-      if (r.ok&&r.data?.userName) members[i].username=r.data.userName;
+      if (r.ok && r.data?.userName) members[i].username = r.data.userName;
     } catch(e) {}
-    if ((i+1)%5===0||i===members.length-1) {
+    if ((i+1)%5===0 || i===members.length-1) {
       renderFn();
       if (statusFn) statusFn(`Looking up usernames… ${i+1}/${members.length}`);
     }
@@ -662,12 +574,12 @@ async function enrichUsernames(members, renderFn, statusFn) {
 
 // ── Adopt: poll status ────────────────────────────────────────────────────────
 async function pollAdoptStatus(statusUrl, key, statusFn) {
-  for (let i=0;i<20;i++) {
+  for (let i=0; i<20; i++) {
     await new Promise(r=>setTimeout(r,5000));
     try {
-      const r = await apiFetch(`/api/adopt/status?url=${encodeURIComponent(statusUrl)}&key=${encodeURIComponent(key)}&adoptHost=${encodeURIComponent(el('adoptHost').value.trim()||'https://app.pendo.io')}`);
+      const r = await apiFetch(`/api/adopt/status?url=${encodeURIComponent(statusUrl)}&key=${encodeURIComponent(key)}`);
       if (!r.ok) break;
-      const cmd=(r.data?.command||'').toLowerCase();
+      const cmd = (r.data?.command||'').toLowerCase();
       if (cmd==='finish') { statusFn(`✓ Done! ${r.data?.totalTagged??'?'} visitor(s) added to segment.`,'ok'); return; }
       if (cmd==='error')  { statusFn('✗ Segment processing error. Check Adopt for details.','err'); return; }
       statusFn(`⏳ Status: ${cmd||'pending'}… (${r.data?.totalTagged??0} processed)`,'');
@@ -676,15 +588,11 @@ async function pollAdoptStatus(statusUrl, key, statusFn) {
 }
 
 // ── Modals ────────────────────────────────────────────────────────────────────
-function makeOverlay() {
-  const o=document.createElement('div'); o.className='modal-overlay'; return o;
-}
-function makeBox() {
-  const b=document.createElement('div'); b.className='modal-box'; return b;
-}
+function makeOverlay() { const o=document.createElement('div'); o.className='modal-overlay'; return o; }
+function makeBox()     { const b=document.createElement('div'); b.className='modal-box'; return b; }
 
 function showConfirm(message, confirmLabel='Create Segment') {
-  return new Promise(resolve=>{
+  return new Promise(resolve => {
     const overlay=makeOverlay(), box=makeBox();
     const msg=document.createElement('p'); msg.style.cssText='margin:0 0 20px;font-size:14px;color:#111827;line-height:1.5'; msg.textContent=message;
     const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:10px;justify-content:flex-end';
@@ -695,12 +603,12 @@ function showConfirm(message, confirmLabel='Create Segment') {
 }
 
 function showUserPicker(email, users) {
-  return new Promise(resolve=>{
+  return new Promise(resolve => {
     const overlay=makeOverlay(), box=makeBox();
     const title=document.createElement('p'); title.style.cssText='margin:0 0 4px;font-size:13px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.05em'; title.textContent='Multiple accounts found';
     const sub=document.createElement('p'); sub.style.cssText='margin:0 0 14px;font-size:13px;color:#6b7280;word-break:break-all'; sub.textContent=email;
     const sel=document.createElement('select'); sel.style.cssText='width:100%;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;margin-bottom:16px;background:#fff';
-    users.forEach((u,i)=>{const o=document.createElement('option');o.value=i;const fn=[u.name?.given,u.name?.family].filter(Boolean).join(' ');o.textContent=fn?`${u.userName} — ${fn}`:u.userName;sel.appendChild(o);});
+    users.forEach((u,i) => { const o=document.createElement('option'); o.value=i; const fn=[u.name?.given,u.name?.family].filter(Boolean).join(' '); o.textContent=fn?`${u.userName} — ${fn}`:u.userName; sel.appendChild(o); });
     const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:10px;justify-content:flex-end';
     const skip=document.createElement('button'); skip.textContent='Skip'; skip.className='btn-ghost'; skip.onclick=()=>{document.body.removeChild(overlay);resolve(null);};
     const use=document.createElement('button'); use.textContent='Use this account'; use.className='btn-primary'; use.onclick=()=>{document.body.removeChild(overlay);resolve(users[parseInt(sel.value)]);};
@@ -709,7 +617,7 @@ function showUserPicker(email, users) {
 }
 
 function showDuplicateSegmentPrompt(name, existing, count) {
-  return new Promise(resolve=>{
+  return new Promise(resolve => {
     const overlay=makeOverlay(), box=makeBox();
     const title=document.createElement('p'); title.style.cssText='margin:0 0 4px;font-size:13px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.05em'; title.textContent='Duplicate Segment Name';
     const sub=document.createElement('p'); sub.style.cssText='margin:0 0 16px;font-size:13px;color:#374151;line-height:1.5'; sub.innerHTML=`A segment named <strong>"${name}"</strong> already exists. How would you like to proceed?`;
@@ -722,7 +630,7 @@ function showDuplicateSegmentPrompt(name, existing, count) {
 }
 
 function promptForIntegrationKey() {
-  return new Promise(resolve=>{
+  return new Promise(resolve => {
     const overlay=makeOverlay(), box=makeBox();
     const title=document.createElement('p'); title.style.cssText='margin:0 0 4px;font-size:13px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.05em'; title.textContent='Pendo Integration Key';
     const sub=document.createElement('p'); sub.style.cssText='margin:0 0 14px;font-size:13px;color:#6b7280;line-height:1.5'; sub.textContent='Enter your Pendo integration key to create or update segments in Blackboard Adopt.';
@@ -735,27 +643,21 @@ function promptForIntegrationKey() {
       el('adoptKey').value=val; el('adoptKey2').value=val;
       saveAdoptSettings(); document.body.removeChild(overlay); resolve(val);
     };
-    input.addEventListener('keydown',e=>{if(e.key==='Enter')save.click();});
+    input.addEventListener('keydown', e=>{if(e.key==='Enter')save.click();});
     btns.append(skip,save); box.append(title,sub,input,btns); overlay.append(box); document.body.append(overlay); setTimeout(()=>input.focus(),50);
   });
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function saveAdoptSettings() {
-  // Only persist the host, never the key
   localStorage.setItem('adoptSettings', JSON.stringify({
-    host: el('adoptHost').value.trim()
+    host:   el('adoptHost').value.trim(),
+    siteId: el('adoptSiteId').value.trim(),
   }));
 }
 
-function setDot(state) {
-  const d=el('statusDot'); d.className='dot'; if(state) d.classList.add(state);
-}
-function setAdoptStatus(msg,cls) {
-  const s=el('adoptStatus'); s.textContent=msg; s.className='adopt-status'+(cls?' '+cls:'');
-}
-function setAdoptStatus2(msg,cls) {
-  const s=el('adoptStatus2'); s.textContent=msg; s.className='adopt-status'+(cls?' '+cls:'');
-}
+function setDot(state) { const d=el('statusDot'); d.className='dot'; if(state) d.classList.add(state); }
+function setAdoptStatus(msg,cls)  { const s=el('adoptStatus');  s.textContent=msg; s.className='adopt-status'+(cls?' '+cls:''); }
+function setAdoptStatus2(msg,cls) { const s=el('adoptStatus2'); s.textContent=msg; s.className='adopt-status'+(cls?' '+cls:''); }
 function showError(msg) { const b=el('errorBar'); b.textContent='⚠ '+msg; b.style.display='block'; }
 function clearError()   { el('errorBar').style.display='none'; }
