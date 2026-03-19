@@ -1,12 +1,18 @@
 // app.js — Adopt User Lookup LTI frontend
 'use strict';
 
-// ── UUID prefix ───────────────────────────────────────────────────────────────
+// ── UUID prefix — reads from Site ID input field ─────────────────────────────
 function getUuidPrefix() {
-  if (window._uuidPrefix) return window._uuidPrefix;
-  // Fallback: try sessionStorage
-  try { const p = sessionStorage.getItem('lti_uuid_prefix'); if (p) { window._uuidPrefix = p; return p; } } catch(e) {}
-  return '';
+  // Read from input field first (most authoritative)
+  const siteIdEl = document.getElementById('adoptSiteId');
+  const siteId = siteIdEl ? siteIdEl.value.trim() : '';
+  if (siteId) {
+    // Ensure it ends with underscore
+    const prefix = siteId.endsWith('_') ? siteId : siteId + '_';
+    window._uuidPrefix = prefix;
+    return prefix;
+  }
+  return window._uuidPrefix || '';
 }
 
 async function fetchAndCachePrefix() {
@@ -24,16 +30,21 @@ async function fetchAndCachePrefix() {
 
 // Discover prefix from Pendo by sampling an existing segment's visitor IDs
 async function discoverPrefixFromPendo(key) {
-  if (window._uuidPrefix) return window._uuidPrefix;
+  console.log('[App] discoverPrefixFromPendo called, key length:', key?.length, 'current prefix:', window._uuidPrefix);
+  if (!key) return window._uuidPrefix || '';
   try {
     const r = await apiFetch(`/api/adopt/prefix?key=${encodeURIComponent(key)}`);
+    console.log('[App] /api/adopt/prefix response:', r.ok, r.status, r.data);
     if (r.ok && r.data?.prefix) {
       window._uuidPrefix = r.data.prefix;
-      console.log('[App] UUID prefix discovered from Pendo:', window._uuidPrefix);
+      console.log('[App] UUID prefix discovered:', window._uuidPrefix);
       return window._uuidPrefix;
     }
+    if (r.ok && r.data?.prefix === '') {
+      console.warn('[App] Prefix discovery returned empty — no segments with members found');
+    }
   } catch(e) { console.warn('[App] discoverPrefixFromPendo error:', e); }
-  return '';
+  return window._uuidPrefix || '';
 }
 
 // Strip any prefix from a UUID — handles both prefixed and bare UUIDs
@@ -166,8 +177,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('segCount').textContent = '';
   });
 
-  // Fetch UUID prefix from server (reliable regardless of sessionStorage/cookie state)
-  await fetchAndCachePrefix();
+  // Restore site ID from localStorage (not sensitive, safe to persist)
+  const savedSiteId = localStorage.getItem('adoptSiteId') || '';
+  if (savedSiteId) el('adoptSiteId').value = savedSiteId;
+  // Save site ID when changed
+  el('adoptSiteId').addEventListener('input', () => {
+    localStorage.setItem('adoptSiteId', el('adoptSiteId').value.trim());
+  });
 
   setDot('ok');
 });
@@ -405,10 +421,10 @@ async function pushToAdopt() {
   if (!key)   { setAdoptStatus('Integration key is required.','err'); return; }
   if (!name)  { setAdoptStatus('Segment name is required.','err'); return; }
   if (!uuids.length) { setAdoptStatus('No UUIDs to push.','err'); return; }
-  // Ensure prefix is known before pushing — always try since it may have changed
-  setAdoptStatus('Discovering visitor ID prefix…','');
-  await discoverPrefixFromPendo(key);
-  console.log('[App] Prefix before push:', getUuidPrefix());
+  // Get prefix from Site ID field
+  const prefix = getUuidPrefix();
+  if (!prefix) { setAdoptStatus('⚠ Enter your Pendo Site ID above before pushing.','err'); return; }
+  console.log('[App] Prefix for push:', prefix);
 
   // Duplicate check
   const existing = (window._adoptSegments||[]).filter(s=>(s.name||'').toLowerCase()===name.toLowerCase());

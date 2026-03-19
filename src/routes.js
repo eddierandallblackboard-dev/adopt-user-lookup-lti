@@ -148,6 +148,7 @@ router.get('/adopt/segments', async (req, res) => {
 // Discovers the visitor ID prefix by sampling any segment's members
 router.get('/adopt/prefix', async (req, res) => {
   const { key } = req.query;
+  console.log('[Adopt] /prefix called, key present:', !!key);
   if (!key) return res.status(400).json({ error: 'key required' });
   const adoptHost = getAdoptHost(req);
   try {
