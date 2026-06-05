@@ -62,12 +62,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Sync creds between panels
+  // Sync creds between panels (and persist on edit)
   ['adoptHost','adoptKey'].forEach(id => {
-    el(id).addEventListener('input', () => { el(id+'2').value = el(id).value; });
+    el(id).addEventListener('input', () => { el(id+'2').value = el(id).value; saveAdoptSettings(); });
   });
   ['adoptHost2','adoptKey2'].forEach(id => {
-    el(id).addEventListener('input', () => { el(id.replace('2','')).value = el(id).value; });
+    el(id).addEventListener('input', () => { el(id.replace('2','')).value = el(id).value; saveAdoptSettings(); });
   });
 
   // Mode toggle
@@ -116,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const saved = JSON.parse(localStorage.getItem('adoptSettings') || '{}');
   if (saved.host)   { el('adoptHost').value = saved.host; el('adoptHost2').value = saved.host; }
   if (saved.siteId) { el('adoptSiteId').value = saved.siteId; }
+  if (saved.key)    { el('adoptKey').value = saved.key; el('adoptKey2').value = saved.key; }
 
   // Save site ID on change
   el('adoptSiteId').addEventListener('input', saveAdoptSettings);
@@ -733,6 +734,7 @@ function saveAdoptSettings() {
   localStorage.setItem('adoptSettings', JSON.stringify({
     host:   el('adoptHost').value.trim(),
     siteId: el('adoptSiteId').value.trim(),
+    key:    el('adoptKey').value.trim(),
   }));
 }
 
