@@ -7,39 +7,43 @@
 <link rel="stylesheet" href="/css/app.css"/>
 </head>
 <body>
+<!-- Global screen-reader announcement channel -->
+<div id="srAnnounce" class="sr-only" role="status" aria-live="polite"></div>
+
 <div class="wrap">
 
   <!-- Header -->
-  <div class="header">
+  <header class="header">
     <div class="header-left">
-      <span class="dot" id="statusDot"></span>
+      <span class="dot" id="statusDot" aria-hidden="true"></span>
+      <span id="statusText" class="sr-only" role="status" aria-live="polite">Ready</span>
       <h1>Adopt User <span>Lookup</span></h1>
     </div>
-  </div>
+  </header>
 
   <!-- Tabs -->
-  <div class="tabs">
-    <button class="tab-btn active" data-tab="tab-lookup">UUID Lookup</button>
-    <button class="tab-btn" data-tab="tab-adopt">Adopt Segments</button>
+  <div class="tabs" role="tablist" aria-label="Sections">
+    <button class="tab-btn active" id="tab-lookup-btn" role="tab" aria-selected="true" aria-controls="tab-lookup" data-tab="tab-lookup">UUID Lookup</button>
+    <button class="tab-btn" id="tab-adopt-btn" role="tab" aria-selected="false" aria-controls="tab-adopt" tabindex="-1" data-tab="tab-adopt">Adopt Segments</button>
   </div>
 
   <!-- ══ TAB: UUID Lookup ══ -->
-  <div class="tab-pane active" id="tab-lookup">
+  <div class="tab-pane active" id="tab-lookup" role="tabpanel" aria-labelledby="tab-lookup-btn" tabindex="0">
 
-    <div class="error-bar" id="errorBar"></div>
+    <div class="error-bar" id="errorBar" role="alert" aria-live="assertive"></div>
 
     <!-- Reverse lookup: username/email → Adopt Visitor ID -->
     <div class="panel">
-      <h2>User → Adopt Visitor ID</h2>
+      <h2 id="reverseHeading">User → Adopt Visitor ID</h2>
       <div style="display:flex;gap:8px;align-items:flex-end">
         <div class="field" style="flex:1;margin-bottom:0">
-          <label>Username or Email</label>
+          <label for="reverseInput">Username or Email</label>
           <input type="text" id="reverseInput" placeholder="username or email address…"/>
         </div>
-        <button class="btn-primary" id="reverseLookupBtn">Look Up →</button>
-        <button class="btn-ghost" id="reverseResetBtn">↺ Reset</button>
+        <button class="btn-primary" id="reverseLookupBtn">Look Up <span aria-hidden="true">→</span></button>
+        <button class="btn-ghost" id="reverseResetBtn"><span aria-hidden="true">↺</span> Reset</button>
       </div>
-      <div id="reverseResult" style="margin-top:8px;font-size:13px;min-height:18px"></div>
+      <div id="reverseResult" role="status" aria-live="polite" style="margin-top:8px;font-size:13px;min-height:18px"></div>
     </div>
 
     <!-- Single UUID lookup -->
@@ -47,13 +51,13 @@
       <h2>UUID → Username Lookup</h2>
       <div style="display:flex;gap:8px;align-items:flex-end">
         <div class="field" style="flex:1;margin-bottom:0">
-          <label>Blackboard UUID</label>
+          <label for="uuidInput">Blackboard UUID</label>
           <input type="text" id="uuidInput" placeholder="Paste a UUID…" style="font-family:'Courier New',monospace;font-size:13px"/>
         </div>
-        <button class="btn-primary" id="uuidLookupBtn">Look Up →</button>
-        <button class="btn-ghost" id="uuidResetBtn">↺ Reset</button>
+        <button class="btn-primary" id="uuidLookupBtn">Look Up <span aria-hidden="true">→</span></button>
+        <button class="btn-ghost" id="uuidResetBtn"><span aria-hidden="true">↺</span> Reset</button>
       </div>
-      <div id="uuidResult" style="margin-top:8px;font-size:13px;min-height:18px"></div>
+      <div id="uuidResult" role="status" aria-live="polite" style="margin-top:8px;font-size:13px;min-height:18px"></div>
     </div>
 
     <!-- Batch CSV lookup -->
@@ -61,24 +65,24 @@
       <h2>Data to Process</h2>
       <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
         <div class="field" style="width:100%;margin-bottom:0">
-          <label>Upload Email CSV</label>
-          <div class="dropzone" id="dropzone">
+          <span class="field-label-text" id="uploadLabel" style="font-size:12px;font-weight:700;color:#374151">Upload Email CSV</span>
+          <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-labelledby="uploadLabel" aria-describedby="dropSub">
             <div class="drop-inner" id="dropInner">
-              <div class="drop-icon">⬆</div>
-              <div class="drop-text">Drop CSV or click to browse</div>
-              <div class="drop-sub">Must contain an email column</div>
+              <div class="drop-icon" aria-hidden="true">⬆</div>
+              <div class="drop-text">Drop CSV here, or press Enter to browse</div>
+              <div class="drop-sub" id="dropSub">Must contain an email column</div>
             </div>
           </div>
-          <input type="file" id="fileInput" accept=".csv,text/csv" style="display:none"/>
+          <input type="file" id="fileInput" accept=".csv,text/csv" class="sr-only" tabindex="-1" aria-hidden="true"/>
         </div>
         <div class="field" id="colSelectorWrap" style="visibility:hidden;width:100%">
-          <label>Email Column</label>
+          <label for="colSelector">Email Column</label>
           <select id="colSelector"></select>
         </div>
         <div class="actions" style="justify-content:center;width:100%;display:flex;margin-top:2px">
-          <button class="btn-primary" id="runBtn" disabled>Process Emails →</button>
-          <button class="btn-ghost" id="stopBtn" style="display:none">■ Stop</button>
-          <button class="btn-ghost" id="resetBtn">↺ Reset</button>
+          <button class="btn-primary" id="runBtn" disabled>Process Emails <span aria-hidden="true">→</span></button>
+          <button class="btn-ghost" id="stopBtn" style="display:none"><span aria-hidden="true">■</span> Stop</button>
+          <button class="btn-ghost" id="resetBtn"><span aria-hidden="true">↺</span> Reset</button>
         </div>
       </div>
     </div>
@@ -86,10 +90,12 @@
     <!-- Results -->
     <div class="panel hidden" id="resultsPanel">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <span id="progressTitle" style="font-size:13px;font-weight:700;color:#374151;flex:1"></span>
-        <button class="btn-dl hidden" id="dlBtn">⬇ Download</button>
+        <span id="progressTitle" role="status" aria-live="polite" style="font-size:13px;font-weight:700;color:#374151;flex:1"></span>
+        <button class="btn-dl hidden" id="dlBtn"><span aria-hidden="true">⬇</span> Download</button>
       </div>
-      <div class="prog-track"><div class="prog-bar" id="progBar"></div></div>
+      <div class="prog-track">
+        <div class="prog-bar" id="progBar" role="progressbar" aria-label="Processing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+      </div>
       <div class="results-top-row">
         <div class="stat-card"><div class="num" id="statFound" style="color:#15803d">0</div><div class="lbl">Found</div></div>
         <div class="stat-card"><div class="num" id="statMissed" style="color:#b45309">0</div><div class="lbl">Not Found</div></div>
@@ -102,7 +108,8 @@
       <div class="hidden" id="tablePanel">
         <div class="tbl-wrap tall">
           <table style="width:100%">
-            <thead><tr><th>Email</th><th>UUID</th><th>Status</th></tr></thead>
+            <caption class="sr-only">Email to UUID lookup results</caption>
+            <thead><tr><th scope="col">Email</th><th scope="col">UUID</th><th scope="col">Status</th></tr></thead>
             <tbody id="resultsBody"></tbody>
           </table>
         </div>
@@ -115,16 +122,16 @@
       <div style="display:flex;flex-direction:column;gap:6px">
         <div class="adopt-row">
           <div class="field">
-            <label>Adopt API Host</label>
+            <label for="adoptHost">Adopt API Host</label>
             <input type="url" id="adoptHost" placeholder="https://app.pendo.io" value="https://app.pendo.io"/>
           </div>
           <div class="field">
-            <label>Integration Key</label>
+            <label for="adoptKey">Integration Key</label>
             <input type="password" id="adoptKey" placeholder="Paste your integration key"/>
           </div>
         </div>
         <input type="hidden" id="adoptSiteId"/>
-        <div style="display:flex;gap:8px;align-items:center">
+        <div style="display:flex;gap:8px;align-items:center" role="radiogroup" aria-label="Segment mode">
           <label style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap" id="adoptModeLabelCreate">
             <input type="radio" name="adoptMode" id="adoptModeCreate" value="create" checked/>Create new segment
           </label>
@@ -134,17 +141,17 @@
         </div>
         <div id="adoptCreateRow" class="adopt-row">
           <div class="field">
-            <label>Segment Name</label>
+            <label for="adoptSegmentName">Segment Name</label>
             <input type="text" id="adoptSegmentName" placeholder="e.g. Targeted Users – March 2026"/>
           </div>
-          <button class="btn-primary" id="adoptPushBtn" style="flex-shrink:0">Create Segment →</button>
+          <button class="btn-primary" id="adoptPushBtn" style="flex-shrink:0">Create Segment <span aria-hidden="true">→</span></button>
         </div>
         <div id="adoptUpdateRow" style="display:none;flex-direction:column;gap:6px">
           <div class="field" style="margin-bottom:0">
-            <label>Existing Segment</label>
+            <label for="adoptSegmentSelect">Existing Segment</label>
             <select id="adoptSegmentSelect" style="width:100%"><option value="">— Select existing segment to update —</option></select>
           </div>
-          <div><button class="btn-primary" id="adoptUpdateBtn">Update Segment →</button></div>
+          <div><button class="btn-primary" id="adoptUpdateBtn">Update Segment <span aria-hidden="true">→</span></button></div>
         </div>
         <div id="adoptMembersPanel1" class="hidden">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -153,40 +160,42 @@
           </div>
           <div class="tbl-wrap short">
             <table style="width:100%">
-              <thead><tr><th>#</th><th>UUID</th><th>BB Username</th></tr></thead>
+              <caption class="sr-only">Segment members</caption>
+              <thead><tr><th scope="col"><span class="sr-only">Row number</span><span aria-hidden="true">#</span></th><th scope="col">UUID</th><th scope="col">BB Username</th></tr></thead>
               <tbody id="adoptMembers1Body"></tbody>
             </table>
           </div>
         </div>
-        <div class="adopt-status" id="adoptStatus"></div>
+        <div class="adopt-status" id="adoptStatus" role="status" aria-live="polite"></div>
       </div>
     </div>
 
   </div><!-- end tab-lookup -->
 
   <!-- ══ TAB: Adopt Segments ══ -->
-  <div class="tab-pane" id="tab-adopt">
+  <div class="tab-pane" id="tab-adopt" role="tabpanel" aria-labelledby="tab-adopt-btn" tabindex="0" hidden>
 
     <div class="panel">
       <h2>Adopt Connection</h2>
       <div class="adopt-row">
         <div class="field">
-          <label>Adopt API Host</label>
+          <label for="adoptHost2">Adopt API Host</label>
           <input type="url" id="adoptHost2" placeholder="https://app.pendo.io" value="https://app.pendo.io"/>
         </div>
         <div class="field">
-          <label>Integration Key</label>
+          <label for="adoptKey2">Integration Key</label>
           <input type="password" id="adoptKey2" placeholder="Paste your integration key"/>
         </div>
         <button class="btn-primary" id="loadSegmentsBtn" style="flex-shrink:0">Load Segments</button>
       </div>
-      <div class="adopt-status" id="adoptStatus2"></div>
+      <div class="adopt-status" id="adoptStatus2" role="status" aria-live="polite"></div>
     </div>
 
     <div class="panel" id="segmentSelectorPanel" style="display:none">
       <h2>Segment</h2>
       <div class="adopt-row">
         <div class="field" style="flex:1;margin-bottom:0">
+          <label for="segmentSelect" class="sr-only">Choose a segment</label>
           <select id="segmentSelect"><option value="">— choose a segment —</option></select>
         </div>
         <button class="btn-primary" id="showMembersBtn" disabled>Show Members</button>
@@ -198,7 +207,8 @@
       <h2 id="segmentMembersTitle"></h2>
       <div class="tbl-wrap tall">
         <table style="width:100%">
-          <thead><tr><th>#</th><th>UUID</th><th>BB Username</th></tr></thead>
+          <caption class="sr-only">Segment members</caption>
+          <thead><tr><th scope="col"><span class="sr-only">Row number</span><span aria-hidden="true">#</span></th><th scope="col">UUID</th><th scope="col">BB Username</th></tr></thead>
           <tbody id="segmentMembersBody"></tbody>
         </table>
       </div>

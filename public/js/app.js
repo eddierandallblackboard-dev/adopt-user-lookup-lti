@@ -46,19 +46,37 @@ let aborted = false;
 
 const el = id => document.getElementById(id);
 
+// Announce a message to screen readers via the global live region
+function announce(msg) {
+  const a = el('srAnnounce');
+  if (!a) return;
+  a.textContent = '';
+  setTimeout(() => { a.textContent = msg; }, 30);
+}
+
+// Copy helper used by dynamically-rendered Copy buttons
+function copyVisitorId(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✓';
+    announce('Visitor ID copied to clipboard');
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  // Tab switching
+  // Tab switching (ARIA tab pattern)
   document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById(btn.dataset.tab).classList.add('active');
-      if (btn.dataset.tab === 'tab-adopt' && !el('adoptKey2').value.trim()) {
-        const key = await promptForIntegrationKey();
-        if (key) loadSegments();
-      }
+    btn.addEventListener('click', () => activateTab(btn));
+    btn.addEventListener('keydown', e => {
+      const tabs = [...document.querySelectorAll('.tab-btn')];
+      const i = tabs.indexOf(btn);
+      let next = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = tabs[(i + 1) % tabs.length];
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = tabs[(i - 1 + tabs.length) % tabs.length];
+      else if (e.key === 'Home') next = tabs[0];
+      else if (e.key === 'End') next = tabs[tabs.length - 1];
+      if (next) { e.preventDefault(); activateTab(next); next.focus(); }
     });
   });
 
@@ -83,6 +101,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // File input
   el('fileInput').addEventListener('change', e => handleFile(e.target.files[0]));
   el('dropzone').addEventListener('click', () => el('fileInput').click());
+  el('dropzone').addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el('fileInput').click(); }
+  });
   el('dropzone').addEventListener('dragover', e => { e.preventDefault(); el('dropzone').classList.add('drag'); });
   el('dropzone').addEventListener('dragleave', () => el('dropzone').classList.remove('drag'));
   el('dropzone').addEventListener('drop', e => { e.preventDefault(); el('dropzone').classList.remove('drag'); handleFile(e.dataTransfer.files[0]); });
@@ -123,6 +144,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setDot('ok');
 });
+
+// ── Tab activation (ARIA state + panel visibility) ──────────────────────────────
+async function activateTab(btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    const on = b === btn;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on ? 0 : -1;
+  });
+  document.querySelectorAll('.tab-pane').forEach(p => {
+    const on = p.id === btn.dataset.tab;
+    p.classList.toggle('active', on);
+    if (on) p.removeAttribute('hidden'); else p.setAttribute('hidden', '');
+  });
+  if (btn.dataset.tab === 'tab-adopt' && !el('adoptKey2').value.trim()) {
+    const key = await promptForIntegrationKey();
+    if (key) loadSegments();
+  }
+}
 
 // ── API fetch ─────────────────────────────────────────────────────────────────
 async function apiFetch(path, opts = {}) {
@@ -201,7 +241,7 @@ async function lookupByUserOrEmail() {
         <div style="display:flex;align-items:center;gap:8px">
           <span style="font-size:11px;color:#6b7280;font-weight:600;white-space:nowrap">Adopt Visitor ID</span>
           <span id="visitorIdDisplay" style="font-family:'Courier New',monospace;font-size:12px;color:#1d4ed8;background:#eff6ff;padding:3px 8px;border-radius:4px;border:1px solid #bfdbfe;word-break:break-all">${visitorId}</span>
-          <button onclick="navigator.clipboard.writeText('${visitorId}').then(()=>{this.textContent='✓';setTimeout(()=>this.textContent='Copy',1500)})" style="padding:3px 8px;font-size:11px;background:#1d4ed8;color:#fff;border:none;border-radius:4px;cursor:pointer;flex-shrink:0">Copy</button>
+          <button type="button" onclick="copyVisitorId(this, '${visitorId}')" aria-label="Copy visitor ID to clipboard" style="padding:3px 8px;font-size:11px;background:#1d4ed8;color:#fff;border:none;border-radius:4px;cursor:pointer;flex-shrink:0">Copy</button>
         </div>
         ${!prefix ? '<div style="font-size:11px;color:#b45309">⚠ Pendo Site ID not yet discovered — enter your Adopt integration key and load segments first</div>' : ''}
       </div>`;
@@ -328,6 +368,7 @@ async function finishRun() {
   el('resetBtn').disabled = false;
   updateProgress(results.length, results.length, true);
   el('progressTitle').textContent = `Complete — ${results.length} processed`;
+  announce(`Processing complete. ${results.length} processed, ${results.filter(r=>r._status==='found').length} found.`);
   const foundCount = results.filter(r=>r._status==='found').length;
   if (foundCount > 0) {
     el('dlBtn').classList.remove('hidden');
@@ -352,6 +393,7 @@ function updateProgress(done, total, isDone) {
   const pct = total ? Math.round((done/total)*100) : 0;
   const bar = el('progBar');
   bar.style.width = pct+'%';
+  bar.setAttribute('aria-valuenow', String(pct));
   if (isDone) bar.classList.add('done'); else bar.classList.remove('done');
   if (!isDone) el('progressTitle').textContent = `Processing… ${done} / ${total}`;
 }
@@ -670,16 +712,52 @@ async function pollAdoptStatus(statusUrl, key, statusFn) {
 
 // ── Modals ────────────────────────────────────────────────────────────────────
 function makeOverlay() { const o=document.createElement('div'); o.className='modal-overlay'; return o; }
-function makeBox()     { const b=document.createElement('div'); b.className='modal-box'; return b; }
+function makeBox()     {
+  const b=document.createElement('div'); b.className='modal-box';
+  b.setAttribute('role','dialog'); b.setAttribute('aria-modal','true'); b.tabIndex=-1;
+  return b;
+}
+
+// Mount a modal: labels it, traps focus, wires Escape + backdrop dismiss, restores focus on close.
+function mountModal(overlay, box, initialFocus, onDismiss) {
+  overlay._restoreFocus = document.activeElement;
+  const labelEl = box.querySelector('h1,h2,h3,p,label');
+  if (labelEl) {
+    if (!labelEl.id) labelEl.id = 'mdlTitle_' + Math.random().toString(36).slice(2,8);
+    box.setAttribute('aria-labelledby', labelEl.id);
+  }
+  const onKey = e => {
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(overlay); if (onDismiss) onDismiss(); return; }
+    if (e.key === 'Tab') {
+      const f = box.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])');
+      if (!f.length) return;
+      const first=f[0], last=f[f.length-1];
+      if (e.shiftKey && document.activeElement===first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement===last) { e.preventDefault(); first.focus(); }
+    }
+  };
+  overlay._onKey = onKey;
+  document.addEventListener('keydown', onKey, true);
+  overlay.addEventListener('mousedown', e => { if (e.target===overlay) { closeModal(overlay); if (onDismiss) onDismiss(); } });
+  overlay.append(box); document.body.append(overlay);
+  setTimeout(() => (initialFocus || box).focus(), 30);
+}
+
+function closeModal(overlay) {
+  if (overlay._onKey) document.removeEventListener('keydown', overlay._onKey, true);
+  if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+  const r = overlay._restoreFocus;
+  if (r && typeof r.focus === 'function') { try { r.focus(); } catch(_){} }
+}
 
 function showConfirm(message, confirmLabel='Create Segment') {
   return new Promise(resolve => {
     const overlay=makeOverlay(), box=makeBox();
     const msg=document.createElement('p'); msg.style.cssText='margin:0 0 20px;font-size:14px;color:#111827;line-height:1.5'; msg.textContent=message;
     const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:10px;justify-content:flex-end';
-    const cancel=document.createElement('button'); cancel.textContent='Cancel'; cancel.className='btn-ghost'; cancel.onclick=()=>{document.body.removeChild(overlay);resolve(false);};
-    const confirm=document.createElement('button'); confirm.textContent=confirmLabel; confirm.className='btn-primary'; confirm.onclick=()=>{document.body.removeChild(overlay);resolve(true);};
-    btns.append(cancel,confirm); box.append(msg,btns); overlay.append(box); document.body.append(overlay); confirm.focus();
+    const cancel=document.createElement('button'); cancel.textContent='Cancel'; cancel.className='btn-ghost'; cancel.onclick=()=>{closeModal(overlay);resolve(false);};
+    const confirm=document.createElement('button'); confirm.textContent=confirmLabel; confirm.className='btn-primary'; confirm.onclick=()=>{closeModal(overlay);resolve(true);};
+    btns.append(cancel,confirm); box.append(msg,btns); mountModal(overlay, box, confirm, () => resolve(false));
   });
 }
 
@@ -688,12 +766,12 @@ function showUserPicker(email, users) {
     const overlay=makeOverlay(), box=makeBox();
     const title=document.createElement('p'); title.style.cssText='margin:0 0 4px;font-size:13px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.05em'; title.textContent='Multiple accounts found';
     const sub=document.createElement('p'); sub.style.cssText='margin:0 0 14px;font-size:13px;color:#6b7280;word-break:break-all'; sub.textContent=email;
-    const sel=document.createElement('select'); sel.style.cssText='width:100%;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;margin-bottom:16px;background:#fff';
+    const sel=document.createElement('select'); sel.setAttribute('aria-label','Select account'); sel.style.cssText='width:100%;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;margin-bottom:16px;background:#fff';
     users.forEach((u,i) => { const o=document.createElement('option'); o.value=i; const fn=[u.name?.given,u.name?.family].filter(Boolean).join(' '); o.textContent=fn?`${u.userName} — ${fn}`:u.userName; sel.appendChild(o); });
     const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:10px;justify-content:flex-end';
-    const skip=document.createElement('button'); skip.textContent='Skip'; skip.className='btn-ghost'; skip.onclick=()=>{document.body.removeChild(overlay);resolve(null);};
-    const use=document.createElement('button'); use.textContent='Use this account'; use.className='btn-primary'; use.onclick=()=>{document.body.removeChild(overlay);resolve(users[parseInt(sel.value)]);};
-    btns.append(skip,use); box.append(title,sub,sel,btns); overlay.append(box); document.body.append(overlay); use.focus();
+    const skip=document.createElement('button'); skip.textContent='Skip'; skip.className='btn-ghost'; skip.onclick=()=>{closeModal(overlay);resolve(null);};
+    const use=document.createElement('button'); use.textContent='Use this account'; use.className='btn-primary'; use.onclick=()=>{closeModal(overlay);resolve(users[parseInt(sel.value)]);};
+    btns.append(skip,use); box.append(title,sub,sel,btns); mountModal(overlay, box, use, () => resolve(null));
   });
 }
 
@@ -703,10 +781,10 @@ function showDuplicateSegmentPrompt(name, existing, count) {
     const title=document.createElement('p'); title.style.cssText='margin:0 0 4px;font-size:13px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.05em'; title.textContent='Duplicate Segment Name';
     const sub=document.createElement('p'); sub.style.cssText='margin:0 0 16px;font-size:13px;color:#374151;line-height:1.5'; sub.innerHTML=`A segment named <strong>"${name}"</strong> already exists. How would you like to proceed?`;
     const btns=document.createElement('div'); btns.style.cssText='display:flex;flex-direction:column;gap:8px';
-    const upd=document.createElement('button'); upd.className='btn-primary'; upd.style.textAlign='left'; upd.innerHTML=`<strong>Update existing segment</strong><br><span style="font-weight:400;font-size:12px">Append ${count} visitor${count!==1?'s':''} to "${name}"</span>`; upd.onclick=()=>{document.body.removeChild(overlay);resolve('update');};
-    const cre=document.createElement('button'); cre.className='btn-ghost'; cre.style.textAlign='left'; cre.innerHTML=`<strong>Create anyway</strong><br><span style="font-weight:400;font-size:12px">Create a new segment with the same name</span>`; cre.onclick=()=>{document.body.removeChild(overlay);resolve('create');};
-    const can=document.createElement('button'); can.textContent='Cancel'; can.className='btn-ghost'; can.style.color='#6b7280'; can.onclick=()=>{document.body.removeChild(overlay);resolve(null);};
-    btns.append(upd,cre,can); box.append(title,sub,btns); overlay.append(box); document.body.append(overlay); upd.focus();
+    const upd=document.createElement('button'); upd.className='btn-primary'; upd.style.textAlign='left'; upd.innerHTML=`<strong>Update existing segment</strong><br><span style="font-weight:400;font-size:12px">Append ${count} visitor${count!==1?'s':''} to "${name}"</span>`; upd.onclick=()=>{closeModal(overlay);resolve('update');};
+    const cre=document.createElement('button'); cre.className='btn-ghost'; cre.style.textAlign='left'; cre.innerHTML=`<strong>Create anyway</strong><br><span style="font-weight:400;font-size:12px">Create a new segment with the same name</span>`; cre.onclick=()=>{closeModal(overlay);resolve('create');};
+    const can=document.createElement('button'); can.textContent='Cancel'; can.className='btn-ghost'; can.style.color='#6b7280'; can.onclick=()=>{closeModal(overlay);resolve(null);};
+    btns.append(upd,cre,can); box.append(title,sub,btns); mountModal(overlay, box, upd, () => resolve(null));
   });
 }
 
@@ -715,17 +793,17 @@ function promptForIntegrationKey() {
     const overlay=makeOverlay(), box=makeBox();
     const title=document.createElement('p'); title.style.cssText='margin:0 0 4px;font-size:13px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.05em'; title.textContent='Pendo Integration Key';
     const sub=document.createElement('p'); sub.style.cssText='margin:0 0 14px;font-size:13px;color:#6b7280;line-height:1.5'; sub.textContent='Enter your Pendo integration key to create or update segments in Blackboard Adopt.';
-    const input=document.createElement('input'); input.type='password'; input.placeholder='Paste your integration key'; input.style.cssText='width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;margin-bottom:16px';
+    const input=document.createElement('input'); input.type='password'; input.placeholder='Paste your integration key'; input.setAttribute('aria-label','Pendo integration key'); input.style.cssText='width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;margin-bottom:16px';
     const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:10px;justify-content:flex-end';
-    const skip=document.createElement('button'); skip.textContent='Skip'; skip.className='btn-ghost'; skip.onclick=()=>{document.body.removeChild(overlay);resolve(null);};
+    const skip=document.createElement('button'); skip.textContent='Skip'; skip.className='btn-ghost'; skip.onclick=()=>{closeModal(overlay);resolve(null);};
     const save=document.createElement('button'); save.textContent='Save Key'; save.className='btn-primary';
     save.onclick=()=>{
       const val=input.value.trim(); if(!val){input.style.borderColor='#dc2626';return;}
       el('adoptKey').value=val; el('adoptKey2').value=val;
-      saveAdoptSettings(); document.body.removeChild(overlay); resolve(val);
+      saveAdoptSettings(); closeModal(overlay); resolve(val);
     };
     input.addEventListener('keydown', e=>{if(e.key==='Enter')save.click();});
-    btns.append(skip,save); box.append(title,sub,input,btns); overlay.append(box); document.body.append(overlay); setTimeout(()=>input.focus(),50);
+    btns.append(skip,save); box.append(title,sub,input,btns); mountModal(overlay, box, input, () => resolve(null));
   });
 }
 
@@ -738,7 +816,11 @@ function saveAdoptSettings() {
   }));
 }
 
-function setDot(state) { const d=el('statusDot'); d.className='dot'; if(state) d.classList.add(state); }
+function setDot(state) {
+  const d=el('statusDot'); d.className='dot'; if(state) d.classList.add(state);
+  const labels = { ok:'Connected', running:'Working', done:'Done', err:'Error' };
+  const t = el('statusText'); if (t) t.textContent = labels[state] || 'Ready';
+}
 function setAdoptStatus(msg,cls)  { const s=el('adoptStatus');  s.textContent=msg; s.className='adopt-status'+(cls?' '+cls:''); }
 function setAdoptStatus2(msg,cls) { const s=el('adoptStatus2'); s.textContent=msg; s.className='adopt-status'+(cls?' '+cls:''); }
 function showError(msg) { const b=el('errorBar'); b.textContent='⚠ '+msg; b.style.display='block'; }
